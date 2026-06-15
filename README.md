@@ -6,16 +6,33 @@ One unified MCP server, 60+ AI models — Sora, Kling, Veo, Seedance, Suno, GPT 
 
 [![npm](https://img.shields.io/npm/v/@evolinkai/evolink-media)](https://www.npmjs.com/package/@evolinkai/evolink-media)
 
-## Start Here
+## EvoLink Quick Start
 
 Use this MCP as the tool-calling entry point for EvoLink media models:
 
 - [Browse EvoLink media models](https://evolink.ai/models?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
+- [Read EvoLink API docs](https://docs.evolink.ai?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
 - [Get your EvoLink API key](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
 - [Open the @evolinkai/evolink-media npm package](https://www.npmjs.com/package/@evolinkai/evolink-media)
 - [Browse GPT Image 2 prompt examples](https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts)
 - [Browse Seedance 2.0 prompt examples](https://github.com/EvoLinkAI/awesome-seedance-2.0-prompts)
 - [Open the Suno API guide](https://github.com/EvoLinkAI/awesome-suno-api)
+
+```bash
+export EVOLINK_API_KEY="your_key_here"
+
+curl --request POST \
+  --url https://api.evolink.ai/v1/videos/generations \
+  --header "Authorization: Bearer ${EVOLINK_API_KEY}" \
+  --header 'Content-Type: application/json' \
+  --data '{
+    "model": "seedance-2.0-text-to-video",
+    "prompt": "A cinematic product demo with smooth camera motion, clean studio lighting, 5 seconds",
+    "duration": 5,
+    "quality": "720p",
+    "aspect_ratio": "16:9"
+  }'
+```
 
 ## Install
 
