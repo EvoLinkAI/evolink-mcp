@@ -6,6 +6,20 @@ One unified MCP server, 60+ AI models — Sora, Kling, Veo, Seedance, Suno, GPT 
 
 [![npm](https://img.shields.io/npm/v/@evolinkai/evolink-media)](https://www.npmjs.com/package/@evolinkai/evolink-media)
 
+## EvoLink Quick Start
+
+Use this MCP as the tool-calling entry point for EvoLink media models:
+
+- Model catalog: [EvoLink models](https://evolink.ai/models?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
+- API key: [create an EvoLink API key](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
+- npm package: [@evolinkai/evolink-media](https://www.npmjs.com/package/@evolinkai/evolink-media)
+- Related prompt repos: [GPT Image 2](https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts), [Seedance 2.0](https://github.com/EvoLinkAI/awesome-seedance-2.0-prompts), [Suno](https://github.com/EvoLinkAI/awesome-suno-api)
+
+```bash
+export EVOLINK_API_KEY="your_key_here"
+npx -y @evolinkai/evolink-media@latest
+```
+
 ## Install
 
 ### Claude Desktop
