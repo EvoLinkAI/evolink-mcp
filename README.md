@@ -10,13 +10,15 @@ One unified MCP server, 60+ AI models — Sora, Kling, Veo, Seedance, Suno, GPT 
 
 Use this MCP as the tool-calling entry point for EvoLink media models:
 
-- [Browse EvoLink media models](https://evolink.ai/models?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
-- [Read EvoLink API docs](https://docs.evolink.ai?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
-- [Get your EvoLink API key](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)
-- [Open the @evolinkai/evolink-media npm package](https://www.npmjs.com/package/@evolinkai/evolink-media)
-- [Browse GPT Image 2 prompt examples](https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts)
-- [Browse Seedance 2.0 prompt examples](https://github.com/EvoLinkAI/awesome-seedance-2.0-prompts)
-- [Open the Suno API guide](https://github.com/EvoLinkAI/awesome-suno-api)
+<p align="center">
+  <a href="https://evolink.ai/models?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>Model Page</strong></a> &nbsp;·&nbsp;
+  <a href="https://docs.evolink.ai?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>Docs</strong></a> &nbsp;·&nbsp;
+  <a href="https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>API Key</strong></a> &nbsp;·&nbsp;
+  <a href="https://www.npmjs.com/package/@evolinkai/evolink-media"><strong>npm</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"><strong>GPT Image Prompts</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/EvoLinkAI/awesome-seedance-2.0-prompts"><strong>Seedance Prompts</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/EvoLinkAI/awesome-suno-api"><strong>Suno Guide</strong></a>
+</p>
 
 ```bash
 export EVOLINK_API_KEY="your_key_here"
