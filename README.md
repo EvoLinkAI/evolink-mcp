@@ -16,7 +16,7 @@ Use this MCP as the tool-calling entry point for EvoLink media models:
   <a href="https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>API Key</strong></a> &nbsp;·&nbsp;
   <a href="https://www.npmjs.com/package/@evolinkai/evolink-media"><strong>npm</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"><strong>GPT Image Prompts</strong></a> &nbsp;·&nbsp;
-  <a href="https://github.com/EvoLinkAI/awesome-seedance-2.0-prompts"><strong>Seedance Prompts</strong></a> &nbsp;·&nbsp;
+  <a href="https://github.com/EvoLinkAI/awesome-seedance-2.5-prompts"><strong>Seedance Prompts</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/EvoLinkAI/awesome-suno-api"><strong>Suno Guide</strong></a>
 </p>
 
