@@ -1,5 +1,6 @@
 import { isIP } from 'node:net';
 import { ApiHttpError, withRetry } from './api-client.js';
+import { getApiKey } from '../config.js';
 import {
   DEFAULT_READ_TIMEOUT_MS,
   fetchWithTimeout,
@@ -66,6 +67,34 @@ export interface CatalogSetupResponse {
   warnings: string[];
 }
 
+export interface WorkloadEstimateInput {
+  input_tokens?: number;
+  max_output_tokens?: number;
+  count?: number;
+  duration_seconds?: number;
+  quality?: string;
+}
+
+export interface WorkloadEstimateResponse {
+  estimate_id: string;
+  catalog_version: string;
+  model_id: string;
+  operation: 'text-generation' | 'image-generation' | 'video-generation' | 'audio-generation';
+  currency: string;
+  amount: string;
+  estimated_usage: WorkloadEstimateInput;
+  assumptions: string[];
+  expires_at: string;
+}
+
+export interface RequestDiagnosisResponse {
+  request_id: string;
+  status: string;
+  findings: string[];
+  recovery_actions: string[];
+  observed_at: string;
+}
+
 export interface CatalogResult<T> {
   data: T;
   source: 'live' | 'cache' | 'stale-cache';
@@ -100,6 +129,69 @@ function controlBaseURL(): string {
     throw new Error('EVOLINK_CONTROL_BASE must use HTTPS, except for loopback development, and contain no credentials/query/fragment');
   }
   return configured;
+}
+
+export async function estimateWorkload(
+  modelId: string,
+  operation: WorkloadEstimateResponse['operation'],
+  input: WorkloadEstimateInput,
+): Promise<WorkloadEstimateResponse> {
+  return withRetry(async () => {
+    const response = await fetchWithTimeout(`${controlBaseURL()}/v1/agent-estimates`, {
+      method: 'POST',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+        'X-Evo-Client': 'mcp',
+        'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
+        'X-Evo-Tool': 'estimate_cost',
+      },
+      body: JSON.stringify({ model_id: modelId, operation, input }),
+    }, timeoutFromEnv('EVOLINK_MCP_READ_TIMEOUT_MS', DEFAULT_READ_TIMEOUT_MS));
+    const data = await readJsonBody(response);
+    if (!response.ok) {
+      const message = (data as { error?: { message?: string } }).error?.message ?? `Estimate HTTP ${response.status}`;
+      throw new ApiHttpError(
+        response.status,
+        message,
+        parseRetryAfter(response.headers.get('retry-after')),
+        responseRequestId(response.headers),
+      );
+    }
+    const estimate = data as Partial<WorkloadEstimateResponse>;
+    if (!estimate.estimate_id || !estimate.catalog_version || !estimate.amount || !estimate.currency) {
+      throw new Error('Estimate returned an invalid versioned envelope');
+    }
+    return estimate as WorkloadEstimateResponse;
+  }, 2, 500);
+}
+
+export async function diagnoseRequest(requestId: string): Promise<RequestDiagnosisResponse> {
+  if (!/^[A-Za-z0-9._-]{8,128}$/.test(requestId)) throw new Error('request_id is invalid');
+  const response = await withRetry(async () => {
+    const value = await fetchWithTimeout(`${controlBaseURL()}/v1/agent-diagnosis/requests/${encodeURIComponent(requestId)}`, {
+      method: 'GET',
+      headers: {
+        'Accept': 'application/json',
+        'Authorization': `Bearer ${getApiKey()}`,
+        'X-Evo-Client': 'mcp',
+        'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
+        'X-Evo-Tool': 'diagnose_request',
+      },
+    }, timeoutFromEnv('EVOLINK_MCP_READ_TIMEOUT_MS', DEFAULT_READ_TIMEOUT_MS));
+    if (!value.ok) {
+      const data = await readJsonBody(value);
+      const message = (data as { error?: { message?: string } }).error?.message ?? `Diagnosis HTTP ${value.status}`;
+      throw new ApiHttpError(value.status, message, parseRetryAfter(value.headers.get('retry-after')), responseRequestId(value.headers));
+    }
+    return value;
+  }, 2, 500);
+  const data = await readJsonBody(response) as Partial<RequestDiagnosisResponse>;
+  if (data.request_id !== requestId || !Array.isArray(data.findings) || !Array.isArray(data.recovery_actions)) {
+    throw new Error('Diagnosis returned an invalid envelope');
+  }
+  return data as RequestDiagnosisResponse;
 }
 
 function validCatalogEnvelope(value: unknown): value is { meta: CatalogMeta } {

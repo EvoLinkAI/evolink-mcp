@@ -46,14 +46,15 @@ Choose **Beta** for experimentation. Choose **Official** for production workload
 
 ## Available Tools
 
-Same 11 tools as the official version: `generate_image`, `generate_video`,
+Same 12 tools as the official version: `generate_image`, `generate_video`,
 `generate_music`, `list_models`, `estimate_cost`, `check_task`, `upload_file`,
-`list_files`, `delete_file`, `model_health`, and `mcp_setup`.
+`list_files`, `delete_file`, `model_health`, `mcp_setup`, and `diagnose_request`.
 
-Paid generation tools require `confirm_cost=true` and never retry POSTs
-automatically. File operations use the same explicit upload-directory and
-confirmation controls as the official package.
+Paid generation tools require `confirm_cost=true`; one bounded retry may reuse
+the exact same durable idempotency key and cannot create a second paid intent.
+File operations use the same explicit upload-directory and confirmation controls
+as the official package.
 
 ## License
 
-MIT — [EvoLink AI](https://evolink.ai)
+Apache-2.0 — [EvoLink AI](https://evolink.ai)

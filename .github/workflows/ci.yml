@@ -1,0 +1,31 @@
+name: ci
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        node: ['18', '20', '22']
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --omit=dev
+      - name: Package clean-room preview
+        run: |
+          npm pack --dry-run --workspace packages/evolink-media
+          npm pack --dry-run --workspace packages/evolink-media-beta
+          npm pack --dry-run --workspace packages/evolink-router

@@ -88,6 +88,7 @@ function sleep(ms: number): Promise<void> {
 
 function isRetryable(error: unknown): boolean {
   if (error instanceof ApiHttpError) return RETRYABLE_STATUS_CODES.has(error.status);
+  if (error instanceof PaidRequestOutcomeUnknownError) return true;
   if (error instanceof RequestTimeoutError) return true;
   if (error instanceof TypeError) return true; // network errors (DNS, timeout, etc.)
   return false;
@@ -169,7 +170,8 @@ async function rawRequest(
 
 // --- Public API ---
 
-/** Submit exactly one generation POST. This client never retries a paid write. */
+/** Submit one paid intent. At most one transport retry reuses the exact same
+ * idempotency key; GroAPI's durable ledger prevents duplicate dispatch/billing. */
 export async function apiRequest(
   config: ServerConfig,
   options: RequestOptions,
@@ -177,7 +179,12 @@ export async function apiRequest(
   if (options.method !== 'POST') {
     throw new Error('apiRequest only accepts generation POST operations');
   }
-  return rawRequest(config, { ...options, idempotencyKey: newRunId() });
+  const idempotencyKey = newRunId();
+  return withRetry(
+    () => rawRequest(config, { ...options, idempotencyKey }),
+    1,
+    500,
+  );
 }
 
 /** Query task status (GET). Retries up to 3 times for robust polling. */

@@ -50,7 +50,8 @@ Go to **Settings → MCP** and add:
 | `generate_video` | Generate AI videos (async, returns task_id) |
 | `generate_music` | Generate AI music (async, returns task_id) |
 | `list_models` | List available models with features |
-| `estimate_cost` | Get model info and capabilities |
+| `estimate_cost` | Calculate a workload-specific maximum with production SKU rules |
+| `diagnose_request` | Read redacted recovery facts for an account-owned request |
 | `check_task` | Check async task status and results |
 | `upload_file` | Upload explicitly confirmed media |
 | `list_files` | List files and quota |
@@ -58,8 +59,9 @@ Go to **Settings → MCP** and add:
 | `model_health` | Read canonical model availability |
 | `mcp_setup` | Read versioned secret-free setup facts |
 
-Paid generation tools require `confirm_cost=true` and never retry POSTs
-automatically. File upload requires `confirm_upload=true`; local paths must be
+Paid generation tools require `confirm_cost=true`. A single bounded retry may
+reuse the exact same durable idempotency key and can never create a second paid
+intent. File upload requires `confirm_upload=true`; local paths must be
 inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. File deletion requires
 `confirm_delete=true` and is advertised to MCP clients as destructive.
 CLI-managed installations may set `EVOLINK_CREDENTIAL_HELPER` instead of
@@ -81,4 +83,4 @@ Use `list_models` tool to see the full catalog.
 
 ## License
 
-MIT — [EvoLink AI](https://evolink.ai)
+Apache-2.0 — [EvoLink AI](https://evolink.ai)

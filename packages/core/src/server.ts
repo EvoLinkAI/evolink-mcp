@@ -11,6 +11,7 @@ import { registerDeleteFile } from './tools/delete-file.js';
 import { registerListFiles } from './tools/list-files.js';
 import { registerModelHealth } from './tools/model-health.js';
 import { registerMCPSetup } from './tools/mcp-setup.js';
+import { registerDiagnoseRequest } from './tools/diagnose-request.js';
 
 export { type ServerConfig, createConfig, getApiKey } from './config.js';
 
@@ -31,6 +32,7 @@ export function createServer(config: ServerConfig): McpServer {
   registerListFiles(server);
   registerModelHealth(server);
   registerMCPSetup(server);
+  registerDiagnoseRequest(server);
 
   return server;
 }

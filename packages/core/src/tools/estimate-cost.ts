@@ -1,45 +1,56 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { findModel } from '../data/models.js';
-import { getCatalogPricing } from '../services/catalog-client.js';
+import { estimateWorkload } from '../services/catalog-client.js';
 
 const schema = {
-  model: z.string().describe('Model name to check info for'),
+  model: z.string().describe('Canonical model ID to estimate'),
+  operation: z.enum(['text-generation', 'image-generation', 'video-generation', 'audio-generation'])
+    .describe('Workload type; it must match the model capability'),
+  input_tokens: z.number().int().min(1).max(10_000_000).optional()
+    .describe('Required for text-generation'),
+  max_output_tokens: z.number().int().min(1).max(10_000_000).optional()
+    .describe('Required for text-generation'),
+  count: z.number().int().min(1).max(16).optional()
+    .describe('Required for image-generation'),
+  duration_seconds: z.number().int().min(1).max(3600).optional()
+    .describe('Required for video-generation and audio-generation'),
+  quality: z.string().max(32).optional().describe('Optional canonical quality tier such as 1080p or 4k'),
 };
 
 export function registerEstimateCost(server: McpServer): void {
   server.tool(
     'estimate_cost',
-    'Show canonical unit prices and model facts before generation. This is not a workload-specific billing guarantee.',
+    'Calculate a request-specific maximum estimate with EvoLink production SKU rules. This does not submit a paid generation.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       try {
-        const result = await getCatalogPricing(params.model);
-        const prices = result.data.prices.filter(price => price.model_id === params.model);
-        if (prices.length === 0) {
-          return {
-            content: [{ type: 'text' as const, text: `No active canonical price is published for ${params.model}. Do not infer a price from bundled data.` }],
-            isError: true,
-          };
-        }
+        const estimate = await estimateWorkload(params.model, params.operation, {
+          input_tokens: params.input_tokens,
+          max_output_tokens: params.max_output_tokens,
+          count: params.count,
+          duration_seconds: params.duration_seconds,
+          quality: params.quality,
+        });
         const lines = [
-          `Model: ${params.model}`,
-          `Catalog: ${result.data.meta.catalog_version} (${result.source})`,
-          ...prices.map(price => `${price.role}: ${price.currency} ${price.price} ${price.unit} · effective ${price.effective_at}`),
+          `Estimate: ${estimate.estimate_id}`,
+          `Model: ${estimate.model_id}`,
+          `Operation: ${estimate.operation}`,
+          `Catalog: ${estimate.catalog_version}`,
+          `Estimated maximum cost: ${estimate.currency} ${estimate.amount}`,
+          `Valid until: ${estimate.expires_at}`,
           '',
-          'These are canonical unit prices, not a request-specific estimate. Use `evolink estimate` for authenticated text workload estimates and require confirm_cost=true before generation.',
+          ...estimate.assumptions.map(value => `- ${value}`),
+          '',
+          'This estimate does not submit or reserve a paid task. A separate generation call still requires confirm_cost=true.',
         ];
-        if (result.warning) lines.push(`Warning: ${result.warning}`);
         return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
       } catch (error) {
-        const model = findModel(params.model);
-        const reason = error instanceof Error ? error.message : 'unknown Catalog failure';
+        const reason = error instanceof Error ? error.message : 'unknown estimate failure';
         return {
           content: [{
             type: 'text' as const,
-            text: model
-              ? `Canonical pricing is unavailable (${reason}). ${model.name} exists only in the bundled fallback; no cost is asserted.`
-              : `Model "${params.model}" was not found and canonical pricing is unavailable (${reason}).`,
+            text: `A production-aligned workload estimate is unavailable for ${params.model}: ${reason}. Do not infer a price or submit a paid generation without a successful estimate.`,
           }],
           isError: true,
         };

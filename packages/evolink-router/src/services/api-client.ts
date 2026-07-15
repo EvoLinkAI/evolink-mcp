@@ -21,7 +21,7 @@ export class ApiHttpError extends Error {
 
 export class PaidRequestOutcomeUnknownError extends Error {
   constructor(public readonly cause: unknown) {
-    super('paid routing request outcome is unknown; do not retry or escalate automatically');
+    super('paid routing request outcome is unknown after the bounded idempotent retry; do not create a new intent or escalate');
     this.name = 'PaidRequestOutcomeUnknownError';
   }
 }
@@ -55,6 +55,7 @@ function requestId(response: Response): string | undefined {
 async function rawChatRequest(
   config: RouterConfig,
   req: ChatRequest,
+  runId: string,
 ): Promise<ChatResponse> {
   const fallback = findModel(req.model);
   let apiFormat = fallback?.apiFormat;
@@ -84,7 +85,6 @@ async function rawChatRequest(
   const adapter = getAdapter(apiFormat);
   const { path, body } = adapter.buildRequest(req);
   const url = `${config.baseUrl}${path}`;
-  const runId = `run_${randomUUID().replaceAll('-', '')}`;
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), writeTimeoutMs());
   let response: Response;
@@ -120,10 +120,24 @@ async function rawChatRequest(
   };
 }
 
-/** Send exactly one paid chat POST. Network and timeout failures are never retried automatically. */
+/** Send one paid intent. A single retry is allowed only with the same durable
+ * GroAPI idempotency key; it never switches models or creates a new intent. */
 export async function chatRequest(
   config: RouterConfig,
   req: ChatRequest,
 ): Promise<ChatResponse> {
-  return rawChatRequest(config, req);
+  const runId = `run_${randomUUID().replaceAll('-', '')}`;
+  let firstError: unknown;
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      return await rawChatRequest(config, req, runId);
+    } catch (error) {
+      firstError = error;
+      const retryable = error instanceof PaidRequestOutcomeUnknownError
+        || (error instanceof ApiHttpError && [429, 502, 503].includes(error.status));
+      if (!retryable || attempt === 1) throw error;
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
+  }
+  throw firstError;
 }

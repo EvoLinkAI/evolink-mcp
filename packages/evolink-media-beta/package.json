@@ -11,7 +11,9 @@
     "dist"
   ],
   "scripts": {
-    "build": "tsc"
+    "build": "tsc",
+    "prepack": "node -e \"require('fs').copyFileSync('../../LICENSE','LICENSE')\"",
+    "postpack": "node -e \"require('fs').rmSync('LICENSE',{force:true})\""
   },
   "keywords": [
     "mcp",
@@ -25,7 +27,7 @@
     "cost-effective"
   ],
   "author": "EvoLink AI <support@evolink.ai>",
-  "license": "MIT",
+  "license": "Apache-2.0",
   "homepage": "https://github.com/EvoLinkAI/evolink-media-mcp",
   "repository": {
     "type": "git",

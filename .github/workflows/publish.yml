@@ -6,6 +6,7 @@ on:
 
 permissions:
   contents: read
+  id-token: write
 
 jobs:
   publish:
@@ -18,17 +19,29 @@ jobs:
           node-version: '20'
           registry-url: 'https://registry.npmjs.org'
 
-      - run: npm install
-      - run: npm run build
+      - run: npm ci
+      - run: npm test
+      - run: npm audit --omit=dev
+      - name: Inspect publish contents
+        run: |
+          npm pack --dry-run --workspace packages/evolink-media
+          npm pack --dry-run --workspace packages/evolink-media-beta
+          npm pack --dry-run --workspace packages/evolink-router
 
       - name: Publish evolink-media
         working-directory: packages/evolink-media
-        run: npm publish --access public
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Publish evolink-media-beta
         working-directory: packages/evolink-media-beta
-        run: npm publish --access public
+        run: npm publish --access public --provenance
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Publish evolink-router
+        working-directory: packages/evolink-router
+        run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}

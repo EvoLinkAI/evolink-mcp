@@ -13,7 +13,7 @@ export class RequestTimeoutError extends Error {
 
 export class PaidRequestOutcomeUnknownError extends Error {
   constructor(public readonly cause: unknown) {
-    super('paid request outcome is unknown; do not retry automatically');
+    super('paid request outcome is unknown after the bounded idempotent retry; do not create a new paid intent');
     this.name = 'PaidRequestOutcomeUnknownError';
   }
 }

@@ -25,6 +25,8 @@ import { fileBase64Upload } from '../packages/evolink-media/dist/core/src/servic
 import {
   getCatalogModels,
   getCatalogPricing,
+  estimateWorkload,
+  diagnoseRequest,
   resetCatalogCacheForTests,
 } from '../packages/evolink-media/dist/core/src/services/catalog-client.js';
 import { registerDeleteFile } from '../packages/evolink-media/dist/core/src/tools/delete-file.js';
@@ -57,15 +59,15 @@ test.afterEach(() => {
   else process.env.EVOLINK_CONTROL_BASE = originalControlBase;
 });
 
-test('paid media POST sends an idempotency key but never retries HTTP or transport failures', async () => {
-  let calls = 0;
-  let idempotencyKey = '';
-  let runId = '';
+test('paid media retry reuses one idempotency key and never creates a second intent', async () => {
+	let calls = 0;
+	const idempotencyKeys = [];
+	const runIds = [];
   globalThis.fetch = async (_url, init) => {
     calls++;
     const headers = new Headers(init.headers);
-    idempotencyKey = headers.get('idempotency-key') ?? '';
-    runId = headers.get('x-evo-run-id') ?? '';
+		idempotencyKeys.push(headers.get('idempotency-key') ?? '');
+		runIds.push(headers.get('x-evo-run-id') ?? '');
     return new Response('{"error":{"message":"busy"}}', {
       status: 503,
       headers: { 'content-type': 'application/json', 'x-request-id': 'req_busy' },
@@ -77,9 +79,10 @@ test('paid media POST sends an idempotency key but never retries HTTP or transpo
     }),
     error => error.status === 503 && error.requestId === 'req_busy',
   );
-  assert.equal(calls, 1);
-  assert.match(idempotencyKey, /^run_[a-f0-9]{32}$/);
-  assert.equal(runId, idempotencyKey);
+	assert.equal(calls, 2);
+	assert.match(idempotencyKeys[0], /^run_[a-f0-9]{32}$/);
+	assert.deepEqual(idempotencyKeys, [idempotencyKeys[0], idempotencyKeys[0]]);
+	assert.deepEqual(runIds, idempotencyKeys);
 
   calls = 0;
   globalThis.fetch = async () => {
@@ -92,7 +95,7 @@ test('paid media POST sends an idempotency key but never retries HTTP or transpo
     }),
     PaidRequestOutcomeUnknownError,
   );
-  assert.equal(calls, 1);
+	assert.equal(calls, 2);
 });
 
 test('read polling honors retry policy while retaining request evidence', async () => {
@@ -147,6 +150,48 @@ test('canonical Catalog is primary, versioned, and cached by request shape', asy
   assert.equal(calls, 2);
 });
 
+test('authenticated workload estimate uses Agent Key and production estimate envelope', async () => {
+  process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
+  let requestBody;
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(url).pathname, '/v1/agent-estimates');
+    const headers = new Headers(init.headers);
+    assert.equal(headers.get('authorization'), 'Bearer sk-test-only');
+    assert.equal(headers.get('x-evo-tool'), 'estimate_cost');
+    requestBody = JSON.parse(init.body);
+    return new Response(JSON.stringify({
+      estimate_id: 'est_media_1', catalog_version: 'cat_43', model_id: 'video-live',
+      operation: 'video-generation', currency: 'USD', amount: '0.42',
+      estimated_usage: { duration_seconds: 10, quality: '1080p' },
+      assumptions: ['Uses the account pricing group.'], expires_at: '2026-07-16T03:00:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const result = await estimateWorkload('video-live', 'video-generation', { duration_seconds: 10, quality: '1080p' });
+  assert.equal(result.amount, '0.42');
+  assert.deepEqual(requestBody, {
+    model_id: 'video-live', operation: 'video-generation',
+    input: { duration_seconds: 10, quality: '1080p' },
+  });
+});
+
+test('request diagnosis is authenticated, scoped, and returns only recovery facts', async () => {
+  process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
+  globalThis.fetch = async (url, init) => {
+    assert.equal(new URL(url).pathname, '/v1/agent-diagnosis/requests/req_safe_0001');
+    assert.equal(new Headers(init.headers).get('authorization'), 'Bearer sk-test-only');
+    return new Response(JSON.stringify({
+      request_id: 'req_safe_0001', status: 'failed',
+      findings: ['Failure category: timeout.'],
+      recovery_actions: ['Do not create a duplicate paid request.'],
+      observed_at: '2026-07-16T03:00:00Z',
+    }), { status: 200, headers: { 'content-type': 'application/json' } });
+  };
+  const result = await diagnoseRequest('req_safe_0001');
+  assert.equal(result.status, 'failed');
+  assert.deepEqual(result.recovery_actions, ['Do not create a duplicate paid request.']);
+  await assert.rejects(diagnoseRequest('../secret'), /invalid/);
+});
+
 test('file write is also single-attempt and carries an idempotency key', async () => {
   let calls = 0;
   let key = '';
@@ -163,18 +208,20 @@ test('file write is also single-attempt and carries an idempotency key', async (
   assert.match(key, /^run_[a-f0-9]{32}$/);
 });
 
-test('router paid POST is single-attempt and blocks cascade-style retry on unknown outcome', async () => {
+test('router paid retry keeps one model and one idempotency intent on unknown outcome', async () => {
   process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
-  let paidCalls = 0;
-  globalThis.fetch = async url => {
+	let paidCalls = 0;
+	const paidKeys = [];
+	globalThis.fetch = async (url, init) => {
     if (new URL(url).hostname === 'control.example') {
       return new Response(JSON.stringify({
         meta: { schema_version: '1', catalog_version: 'cat_router', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
         models: [{ model_id: 'claude-haiku-4-5-20251001', display_name: 'Haiku', provider: 'Anthropic', aliases: [], capabilities: ['text'], protocols: ['anthropic-messages'], lifecycle: 'active' }],
       }), { status: 200, headers: { 'content-type': 'application/json' } });
-    }
-    paidCalls++;
-    throw new TypeError('connection reset');
+		}
+		paidCalls++;
+		paidKeys.push(new Headers(init.headers).get('idempotency-key'));
+		throw new TypeError('connection reset');
   };
   await assert.rejects(
     chatRequest({ baseUrl: 'https://direct.example' }, {
@@ -182,7 +229,8 @@ test('router paid POST is single-attempt and blocks cascade-style retry on unkno
     }),
     RouterOutcomeUnknownError,
   );
-  assert.equal(paidCalls, 1);
+	assert.equal(paidCalls, 2);
+	assert.deepEqual(paidKeys, [paidKeys[0], paidKeys[0]]);
 });
 
 test('router resolves a new model and protocol from canonical Catalog', async () => {

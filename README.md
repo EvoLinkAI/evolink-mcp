@@ -94,7 +94,8 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 | `generate_video` | Generate AI videos | task_id (async) |
 | `generate_music` | Generate AI music & songs | task_id (async) |
 | `list_models` | Browse available models | model list |
-| `estimate_cost` | Get model info & capabilities | model details |
+| `estimate_cost` | Calculate a workload-specific maximum using production SKU rules | estimate ID / amount / assumptions |
+| `diagnose_request` | Read account-scoped, redacted recovery facts for one request | findings / recovery actions |
 | `check_task` | Poll task progress & get results | status / result URLs |
 | `upload_file` | Upload explicitly confirmed media | file URL / file ID |
 | `list_files` | List files and quota | file list / quota |
@@ -107,8 +108,9 @@ All generation tools are **async** — they return a `task_id` immediately. Use 
 ## Safety controls
 
 - `generate_image`, `generate_video`, and `generate_music` require
-  `confirm_cost=true`. Each invocation sends exactly one POST. Network failures
-  are reported as an unknown paid outcome and are never retried automatically.
+  `confirm_cost=true`. One paid intent may make one bounded retry only with the
+  exact same idempotency key; GroAPI's durable ledger prevents a second dispatch
+  or charge. An unresolved outcome is reported without creating a new intent.
 - Read-only polling may retry `429`, `502`, or `503` and honors `Retry-After`.
 - `upload_file` requires `confirm_upload=true`. Local file access is disabled
   unless `EVOLINK_UPLOAD_ALLOWED_DIRS` lists trusted absolute directories
@@ -195,4 +197,4 @@ npx @modelcontextprotocol/inspector node packages/evolink-media/dist/evolink-med
 
 ## License
 
-MIT — [EvoLink AI](https://evolink.ai)
+Apache-2.0 — [EvoLink AI](https://evolink.ai)
