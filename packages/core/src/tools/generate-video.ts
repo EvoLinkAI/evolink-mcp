@@ -21,14 +21,17 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
       .describe('Reference image URLs for image-to-video'),
     generate_audio: z.boolean().optional()
       .describe('Generate audio/sound effects. Supported by seedance-1.5-pro and veo3.1-pro'),
+    confirm_cost: z.literal(true)
+      .describe('Must be true to confirm submission of one potentially billable generation task.'),
   };
 
   server.tool(
     'generate_video',
     'Generate AI videos. Returns task_id immediately (video takes 2-5min). Use check_task to poll progress.',
     schema,
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
-      const { generate_audio, ...rest } = params;
+      const { generate_audio, confirm_cost: _confirmed, ...rest } = params;
       const body: Record<string, unknown> = { ...rest };
 
       if (generate_audio !== undefined) {
@@ -39,6 +42,7 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
         method: 'POST',
         path: '/v1/videos/generations',
         body,
+        tool: 'generate_video',
       });
 
       const estimatedTime = task.task_info?.estimated_time ?? 180;
@@ -50,6 +54,7 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
         `Status: pending`,
         `Estimated time: ~${estimatedTime}s`,
       ];
+      if (task.request_id) lines.push(`Request ID: ${task.request_id}`);
       if (usageInfo) lines.push(usageInfo);
       lines.push('', `Use check_task with task_id "${task.id}" to poll progress.`);
       lines.push(`Recommended polling interval: 10-15 seconds.`);

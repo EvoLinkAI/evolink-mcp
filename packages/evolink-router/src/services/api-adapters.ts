@@ -12,6 +12,7 @@ export interface ChatRequest {
 export interface ChatResponse {
   content: string;
   model: string;
+  requestId?: string;
   usage?: {
     inputTokens: number;
     outputTokens: number;

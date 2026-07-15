@@ -49,7 +49,8 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
       "command": "npx",
       "args": ["-y", "@evolinkai/evolink-media@latest"],
       "env": {
-        "EVOLINK_API_KEY": "your-key-here"
+        "EVOLINK_API_KEY": "your-key-here",
+        "EVOLINK_UPLOAD_ALLOWED_DIRS": "/absolute/path/to/media"
       }
     }
   }
@@ -95,8 +96,28 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 | `list_models` | Browse available models | model list |
 | `estimate_cost` | Get model info & capabilities | model details |
 | `check_task` | Poll task progress & get results | status / result URLs |
+| `upload_file` | Upload explicitly confirmed media | file URL / file ID |
+| `list_files` | List files and quota | file list / quota |
+| `delete_file` | Permanently delete a confirmed file | deletion receipt |
 
 All generation tools are **async** — they return a `task_id` immediately. Use `check_task` to poll until completion.
+
+## Safety controls
+
+- `generate_image`, `generate_video`, and `generate_music` require
+  `confirm_cost=true`. Each invocation sends exactly one POST. Network failures
+  are reported as an unknown paid outcome and are never retried automatically.
+- Read-only polling may retry `429`, `502`, or `503` and honors `Retry-After`.
+- `upload_file` requires `confirm_upload=true`. Local file access is disabled
+  unless `EVOLINK_UPLOAD_ALLOWED_DIRS` lists trusted absolute directories
+  (separated by `:` on macOS/Linux or `;` on Windows). Resolved paths, size,
+  extension, and content signatures are checked before streaming.
+- `delete_file` is marked destructive and requires `confirm_delete=true`.
+- Optional `EVOLINK_MCP_READ_TIMEOUT_MS` and `EVOLINK_MCP_WRITE_TIMEOUT_MS`
+  values must be between 1,000 and 600,000 milliseconds.
+- Router `delegate` requires `confirm_paid_request=true`. `cascade` defaults to
+  one paid step; multiple steps require an explicit cap and confirmation and
+  return aggregate token usage plus request IDs.
 
 ## Supported Models
 
@@ -149,6 +170,7 @@ git clone https://github.com/EvoLinkAI/evolink-media-mcp.git
 cd evolink-media-mcp
 npm install
 npm run build
+npm test
 ```
 
 Test locally:

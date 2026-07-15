@@ -9,7 +9,9 @@
   ],
   "scripts": {
     "build": "npm run build --workspaces",
-    "clean": "rm -rf packages/*/dist"
+    "clean": "rm -rf packages/*/dist",
+    "test": "npm run build && node --test tests/safety.test.mjs",
+    "check": "npm test"
   },
   "engines": {
     "node": ">=18.0.0"

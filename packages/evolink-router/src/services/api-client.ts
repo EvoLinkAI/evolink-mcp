@@ -1,57 +1,55 @@
+import { randomUUID } from 'node:crypto';
 import type { RouterConfig } from '../config.js';
 import { getApiKey } from '../config.js';
 import { findModel } from '../data/text-models.js';
 import { getAdapter, type ChatRequest, type ChatResponse } from './api-adapters.js';
 import { formatApiError } from './error-handler.js';
 
-// --- Error class ---
+const DEFAULT_WRITE_TIMEOUT_MS = 120_000;
 
 export class ApiHttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly requestId?: string,
   ) {
     super(message);
     this.name = 'ApiHttpError';
   }
 }
 
-// --- Retry logic ---
-
-const RETRYABLE_STATUS_CODES = new Set([429, 502, 503]);
-
-function sleep(ms: number): Promise<void> {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-function isRetryable(error: unknown): boolean {
-  if (error instanceof ApiHttpError) return RETRYABLE_STATUS_CODES.has(error.status);
-  if (error instanceof TypeError) return true; // network errors
-  return false;
-}
-
-export async function withRetry<T>(
-  fn: () => Promise<T>,
-  retries: number,
-  baseDelayMs: number,
-): Promise<T> {
-  let lastError: unknown;
-  for (let attempt = 0; attempt <= retries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-      if (attempt < retries && isRetryable(error)) {
-        await sleep(baseDelayMs * (attempt + 1));
-        continue;
-      }
-      throw error;
-    }
+export class PaidRequestOutcomeUnknownError extends Error {
+  constructor(public readonly cause: unknown) {
+    super('paid routing request outcome is unknown; do not retry or escalate automatically');
+    this.name = 'PaidRequestOutcomeUnknownError';
   }
-  throw lastError;
 }
 
-// --- Core chat request (no retry) ---
+function writeTimeoutMs(): number {
+  const raw = process.env.EVOLINK_MCP_WRITE_TIMEOUT_MS;
+  if (!raw) return DEFAULT_WRITE_TIMEOUT_MS;
+  const parsed = Number(raw);
+  if (!Number.isInteger(parsed) || parsed < 1_000 || parsed > 600_000) {
+    throw new Error('EVOLINK_MCP_WRITE_TIMEOUT_MS must be an integer between 1000 and 600000 milliseconds');
+  }
+  return parsed;
+}
+
+async function responseBody(response: Response): Promise<unknown> {
+  const text = await response.text();
+  if (!text) return {};
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return { message: text.slice(0, 2_000) };
+  }
+}
+
+function requestId(response: Response): string | undefined {
+  return response.headers.get('x-request-id')?.trim()
+    || response.headers.get('x-oneapi-request-id')?.trim()
+    || undefined;
+}
 
 async function rawChatRequest(
   config: RouterConfig,
@@ -65,31 +63,43 @@ async function rawChatRequest(
   const adapter = getAdapter(model.apiFormat);
   const { path, body } = adapter.buildRequest(req);
   const url = `${config.baseUrl}${path}`;
-
-  const response = await fetch(url, {
-    method: 'POST',
-    headers: {
-      'Authorization': `Bearer ${getApiKey()}`,
-      'Content-Type': 'application/json',
-    },
-    body: JSON.stringify(body),
-  });
-
-  const data = await response.json() as unknown;
-
-  if (!response.ok) {
-    throw new ApiHttpError(response.status, formatApiError(response.status, data));
+  const runId = `run_${randomUUID().replaceAll('-', '')}`;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), writeTimeoutMs());
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${getApiKey()}`,
+        'Content-Type': 'application/json',
+        'Idempotency-Key': runId,
+        'X-Evo-Client': 'mcp',
+        'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
+        'X-Evo-Tool': 'router',
+        'X-Evo-Run-Id': runId,
+      },
+      body: JSON.stringify(body),
+      signal: controller.signal,
+    });
+  } catch (error) {
+    throw new PaidRequestOutcomeUnknownError(error);
+  } finally {
+    clearTimeout(timer);
   }
 
-  return adapter.parseResponse(data);
+  const data = await responseBody(response);
+  const responseRequestId = requestId(response);
+  if (!response.ok) {
+    throw new ApiHttpError(response.status, formatApiError(response.status, data), responseRequestId);
+  }
+  return { ...adapter.parseResponse(data), requestId: responseRequestId };
 }
 
-// --- Public API ---
-
-/** Send a chat request with automatic format adaptation and retry. */
+/** Send exactly one paid chat POST. Network and timeout failures are never retried automatically. */
 export async function chatRequest(
   config: RouterConfig,
   req: ChatRequest,
 ): Promise<ChatResponse> {
-  return withRetry(() => rawChatRequest(config, req), 1, 2000);
+  return rawChatRequest(config, req);
 }

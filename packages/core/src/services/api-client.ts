@@ -1,5 +1,18 @@
 import { type ServerConfig, getApiKey } from '../config.js';
 import { formatApiError } from './error-handler.js';
+import {
+  DEFAULT_READ_TIMEOUT_MS,
+  DEFAULT_WRITE_TIMEOUT_MS,
+  MAX_RETRY_DELAY_MS,
+  PaidRequestOutcomeUnknownError,
+  RequestTimeoutError,
+  fetchWithTimeout,
+  newRunId,
+  parseRetryAfter,
+  readJsonBody,
+  responseRequestId,
+  timeoutFromEnv,
+} from './http-policy.js';
 
 // --- Types ---
 
@@ -7,6 +20,8 @@ interface RequestOptions {
   method: 'GET' | 'POST';
   path: string;
   body?: Record<string, unknown>;
+  idempotencyKey?: string;
+  tool?: string;
 }
 
 export interface TaskResponse {
@@ -34,6 +49,7 @@ export interface TaskResponse {
     message?: string;
     type?: string;
   };
+  request_id?: string;
 }
 
 export interface ResultDataItem {
@@ -53,6 +69,8 @@ export class ApiHttpError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly retryAfterMs?: number,
+    public readonly requestId?: string,
   ) {
     super(message);
     this.name = 'ApiHttpError';
@@ -69,6 +87,7 @@ function sleep(ms: number): Promise<void> {
 
 function isRetryable(error: unknown): boolean {
   if (error instanceof ApiHttpError) return RETRYABLE_STATUS_CODES.has(error.status);
+  if (error instanceof RequestTimeoutError) return true;
   if (error instanceof TypeError) return true; // network errors (DNS, timeout, etc.)
   return false;
 }
@@ -85,7 +104,8 @@ export async function withRetry<T>(
     } catch (error) {
       lastError = error;
       if (attempt < retries && isRetryable(error)) {
-        await sleep(baseDelayMs * (attempt + 1));
+        const retryAfterMs = error instanceof ApiHttpError ? error.retryAfterMs : undefined;
+        await sleep(Math.min(retryAfterMs ?? baseDelayMs * (attempt + 1), MAX_RETRY_DELAY_MS));
         continue;
       }
       throw error;
@@ -104,31 +124,58 @@ async function rawRequest(
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${getApiKey()}`,
     'Content-Type': 'application/json',
+    'X-Evo-Client': 'mcp',
+    'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
+    'X-Evo-Tool': options.tool ?? 'unknown',
   };
-
-  const response = await fetch(url, {
-    method: options.method,
-    headers,
-    body: options.body ? JSON.stringify(options.body) : undefined,
-  });
-
-  const data = await response.json() as unknown;
-
-  if (!response.ok) {
-    throw new ApiHttpError(response.status, formatApiError(response.status, data));
+  if (options.idempotencyKey) {
+    headers['Idempotency-Key'] = options.idempotencyKey;
+    headers['X-Evo-Run-Id'] = options.idempotencyKey;
   }
 
-  return data as TaskResponse;
+  let response: Response;
+  try {
+    response = await fetchWithTimeout(url, {
+      method: options.method,
+      headers,
+      body: options.body ? JSON.stringify(options.body) : undefined,
+    }, timeoutFromEnv(
+      options.method === 'GET' ? 'EVOLINK_MCP_READ_TIMEOUT_MS' : 'EVOLINK_MCP_WRITE_TIMEOUT_MS',
+      options.method === 'GET' ? DEFAULT_READ_TIMEOUT_MS : DEFAULT_WRITE_TIMEOUT_MS,
+    ));
+  } catch (error) {
+    if (options.method === 'POST') throw new PaidRequestOutcomeUnknownError(error);
+    throw error;
+  }
+
+  const data = await readJsonBody(response);
+  const requestId = responseRequestId(response.headers);
+
+  if (!response.ok) {
+    throw new ApiHttpError(
+      response.status,
+      formatApiError(response.status, data),
+      parseRetryAfter(response.headers.get('retry-after')),
+      requestId,
+    );
+  }
+
+  const task = data as TaskResponse;
+  if (!task.request_id && requestId) task.request_id = requestId;
+  return task;
 }
 
 // --- Public API ---
 
-/** Submit a generation task (POST). Retries once on 429/502/503 or network failures. */
+/** Submit exactly one generation POST. This client never retries a paid write. */
 export async function apiRequest(
   config: ServerConfig,
   options: RequestOptions,
 ): Promise<TaskResponse> {
-  return withRetry(() => rawRequest(config, options), 1, 2000);
+  if (options.method !== 'POST') {
+    throw new Error('apiRequest only accepts generation POST operations');
+  }
+  return rawRequest(config, { ...options, idempotencyKey: newRunId() });
 }
 
 /** Query task status (GET). Retries up to 3 times for robust polling. */
@@ -137,7 +184,7 @@ export async function queryTask(
   taskId: string,
 ): Promise<TaskResponse> {
   return withRetry(
-    () => rawRequest(config, { method: 'GET', path: `/v1/tasks/${taskId}` }),
+    () => rawRequest(config, { method: 'GET', path: `/v1/tasks/${taskId}`, tool: 'check_task' }),
     3,
     1500,
   );
@@ -147,4 +194,3 @@ export function formatUsageInfo(usage?: TaskResponse['usage']): string {
   if (!usage?.credits_reserved) return '';
   return `Estimated cost: ${usage.credits_reserved} credits (${usage.billing_rule ?? 'standard'})`;
 }
-

@@ -14,12 +14,15 @@ export function registerDelegate(server: McpServer, config: RouterConfig): void 
       .describe('Optional system prompt to set model behavior'),
     max_tokens: z.number().int().min(1).max(128000).optional()
       .describe('Maximum tokens in response (default: 4096)'),
+    confirm_paid_request: z.literal(true)
+      .describe('Must be true to confirm one potentially billable model request.'),
   };
 
   server.tool(
     'delegate',
     'Send a prompt to a specific text model and get the response. Use list_text_models to see available models.',
     schema,
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
       const model = findModel(params.model);
       const response = await chatRequest(config, {
@@ -35,6 +38,7 @@ export function registerDelegate(server: McpServer, config: RouterConfig): void 
       if (response.usage) {
         meta.push(`Tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out`);
       }
+      if (response.requestId) meta.push(`Request ID: ${response.requestId}`);
       if (meta.length > 0) {
         lines.push('', '---', ...meta);
       }

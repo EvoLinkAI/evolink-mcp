@@ -1,7 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RouterConfig } from '../config.js';
-import { chatRequest } from '../services/api-client.js';
+import { PaidRequestOutcomeUnknownError, chatRequest } from '../services/api-client.js';
 import { CASCADE_CHAIN, findModel } from '../data/text-models.js';
 
 type Confidence = 'high' | 'medium' | 'low';
@@ -27,16 +27,32 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
       .describe('Optional system prompt for all models in the chain'),
     max_tokens: z.number().int().min(1).max(128000).optional()
       .describe('Maximum tokens per response (default: 4096)'),
+    max_steps: z.number().int().min(1).max(3).default(1)
+      .describe('Hard cap on paid model calls. Defaults to 1; set 2 or 3 only after approving a cascade budget.'),
+    confirm_paid_requests: z.literal(true)
+      .describe('Must be true to confirm the potentially billable request budget.'),
+    confirm_multiple_paid_requests: z.boolean().default(false)
+      .describe('Must be true when max_steps is greater than 1.'),
   };
 
   server.tool(
     'cascade',
-    'Smart cascade: tries Haiku first, escalates to Sonnet then Opus if confidence is low. Saves cost on simple tasks while ensuring quality on complex ones.',
+    'Budget-capped cascade. Defaults to one paid call; multi-step escalation requires explicit confirmation and reports aggregate token usage.',
     schema,
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
+      if (params.max_steps > 1 && !params.confirm_multiple_paid_requests) {
+        return {
+          content: [{ type: 'text' as const, text: 'Cascade refused: max_steps > 1 requires confirm_multiple_paid_requests=true.' }],
+          isError: true,
+        };
+      }
       const augmentedPrompt = params.prompt + CONFIDENCE_SUFFIX;
-      const chain = [...CASCADE_CHAIN];
+      const chain = [...CASCADE_CHAIN].slice(0, params.max_steps);
       const attempts: string[] = [];
+      const requestIds: string[] = [];
+      let aggregateInputTokens = 0;
+      let aggregateOutputTokens = 0;
 
       for (let i = 0; i < chain.length; i++) {
         const modelName = chain[i];
@@ -50,9 +66,15 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
             systemPrompt: params.system_prompt,
             maxTokens: params.max_tokens,
           });
+          if (response.requestId) requestIds.push(response.requestId);
+          if (response.usage) {
+            aggregateInputTokens += response.usage.inputTokens;
+            aggregateOutputTokens += response.usage.outputTokens;
+          }
 
           if (isLast) {
-            attempts.push(`${model?.description ?? modelName}: final (flagship)`);
+            const reachedFlagship = modelName === CASCADE_CHAIN[CASCADE_CHAIN.length - 1];
+            attempts.push(`${model?.description ?? modelName}: final (${reachedFlagship ? 'flagship' : 'budget cap'})`);
             const lines = [
               response.content,
               '',
@@ -63,6 +85,8 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
             if (response.usage) {
               lines.push(`Tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out`);
             }
+            lines.push(`Aggregate tokens (${i + 1} paid step${i === 0 ? '' : 's'}): ${aggregateInputTokens} in / ${aggregateOutputTokens} out`);
+            if (requestIds.length > 0) lines.push(`Request IDs: ${requestIds.join(', ')}`);
             return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
           }
 
@@ -81,11 +105,14 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
             if (response.usage) {
               lines.push(`Tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out`);
             }
+            lines.push(`Aggregate tokens (${i + 1} paid step${i === 0 ? '' : 's'}): ${aggregateInputTokens} in / ${aggregateOutputTokens} out`);
+            if (requestIds.length > 0) lines.push(`Request IDs: ${requestIds.join(', ')}`);
             return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
           }
 
           attempts.push(`${modelName}: ${confidence} → escalate`);
         } catch (error) {
+          if (error instanceof PaidRequestOutcomeUnknownError) throw error;
           attempts.push(`${modelName}: error → escalate`);
         }
       }

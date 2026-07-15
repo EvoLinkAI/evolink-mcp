@@ -19,17 +19,22 @@ export function registerGenerateImage(server: McpServer, config: ServerConfig): 
       .describe('Reference image URLs for image-to-image or editing'),
     mask_url: z.string().url().optional()
       .describe('Mask image URL (PNG) for partial editing (gpt-4o-image)'),
+    confirm_cost: z.literal(true)
+      .describe('Must be true to confirm submission of one potentially billable generation task.'),
   };
 
   server.tool(
     'generate_image',
     'Generate AI images. Returns task_id immediately. Use check_task to poll progress and get result.',
     schema,
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
+      const { confirm_cost: _confirmed, ...body } = params;
       const task = await apiRequest(config, {
         method: 'POST',
         path: '/v1/images/generations',
-        body: params as Record<string, unknown>,
+        body: body as Record<string, unknown>,
+        tool: 'generate_image',
       });
 
       const estimatedTime = task.task_info?.estimated_time ?? 30;
@@ -41,6 +46,7 @@ export function registerGenerateImage(server: McpServer, config: ServerConfig): 
         `Status: pending`,
         `Estimated time: ~${estimatedTime}s`,
       ];
+      if (task.request_id) lines.push(`Request ID: ${task.request_id}`);
       if (usageInfo) lines.push(usageInfo);
       lines.push('', `Use check_task with task_id "${task.id}" to poll progress.`);
       lines.push(`Recommended polling interval: 3-5 seconds.`);

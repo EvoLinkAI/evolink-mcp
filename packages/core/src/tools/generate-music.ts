@@ -27,17 +27,22 @@ export function registerGenerateMusic(server: McpServer, config: ServerConfig): 
       .describe('Styles to exclude, e.g. "heavy metal, screaming"'),
     vocal_gender: z.enum(['m', 'f']).optional()
       .describe('Vocal gender preference: m = male, f = female. Only in custom mode'),
+    confirm_cost: z.literal(true)
+      .describe('Must be true to confirm submission of one potentially billable generation task.'),
   };
 
   server.tool(
     'generate_music',
     'Generate AI music with Suno models. Returns task_id immediately (1-2min). Use check_task to poll.',
     schema,
+    { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
+      const { confirm_cost: _confirmed, ...body } = params;
       const task = await apiRequest(config, {
         method: 'POST',
         path: '/v1/audios/generations',
-        body: params as Record<string, unknown>,
+        body: body as Record<string, unknown>,
+        tool: 'generate_music',
       });
 
       const estimatedTime = task.task_info?.estimated_time ?? 90;
@@ -49,6 +54,7 @@ export function registerGenerateMusic(server: McpServer, config: ServerConfig): 
         `Status: pending`,
         `Estimated time: ~${estimatedTime}s`,
       ];
+      if (task.request_id) lines.push(`Request ID: ${task.request_id}`);
       if (usageInfo) lines.push(usageInfo);
       lines.push('', `Use check_task with task_id "${task.id}" to poll progress.`);
       lines.push(`Recommended polling interval: 5-10 seconds.`);

@@ -28,7 +28,8 @@ Get your API key at [evolink.ai/dashboard/keys](https://evolink.ai/dashboard/key
       "command": "npx",
       "args": ["-y", "@evolinkai/evolink-media@latest"],
       "env": {
-        "EVOLINK_API_KEY": "your-key-here"
+        "EVOLINK_API_KEY": "your-key-here",
+        "EVOLINK_UPLOAD_ALLOWED_DIRS": "/absolute/path/to/media"
       }
     }
   }
@@ -51,6 +52,14 @@ Go to **Settings → MCP** and add:
 | `list_models` | List available models with features |
 | `estimate_cost` | Get model info and capabilities |
 | `check_task` | Check async task status and results |
+| `upload_file` | Upload explicitly confirmed media |
+| `list_files` | List files and quota |
+| `delete_file` | Permanently delete a confirmed file |
+
+Paid generation tools require `confirm_cost=true` and never retry POSTs
+automatically. File upload requires `confirm_upload=true`; local paths must be
+inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. File deletion requires
+`confirm_delete=true` and is advertised to MCP clients as destructive.
 
 ## Supported Models (60+)
 

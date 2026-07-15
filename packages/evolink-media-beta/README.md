@@ -26,7 +26,8 @@ Get your API key at [evolink.ai/dashboard/keys](https://evolink.ai/dashboard/key
       "command": "npx",
       "args": ["-y", "@evolinkai/evolink-media-beta@latest"],
       "env": {
-        "EVOLINK_API_KEY": "your-key-here"
+        "EVOLINK_API_KEY": "your-key-here",
+        "EVOLINK_UPLOAD_ALLOWED_DIRS": "/absolute/path/to/media"
       }
     }
   }
@@ -45,7 +46,13 @@ Choose **Beta** for experimentation. Choose **Official** for production workload
 
 ## Available Tools
 
-Same 6 tools as the official version: `generate_image`, `generate_video`, `generate_music`, `list_models`, `estimate_cost`, `check_task`.
+Same 9 tools as the official version: `generate_image`, `generate_video`,
+`generate_music`, `list_models`, `estimate_cost`, `check_task`, `upload_file`,
+`list_files`, and `delete_file`.
+
+Paid generation tools require `confirm_cost=true` and never retry POSTs
+automatically. File operations use the same explicit upload-directory and
+confirmation controls as the official package.
 
 ## License
 
