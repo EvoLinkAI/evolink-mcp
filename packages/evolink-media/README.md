@@ -55,11 +55,16 @@ Go to **Settings → MCP** and add:
 | `upload_file` | Upload explicitly confirmed media |
 | `list_files` | List files and quota |
 | `delete_file` | Permanently delete a confirmed file |
+| `model_health` | Read canonical model availability |
+| `mcp_setup` | Read versioned secret-free setup facts |
 
 Paid generation tools require `confirm_cost=true` and never retry POSTs
 automatically. File upload requires `confirm_upload=true`; local paths must be
 inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. File deletion requires
 `confirm_delete=true` and is advertised to MCP clients as destructive.
+CLI-managed installations may set `EVOLINK_CREDENTIAL_HELPER` instead of
+serializing `EVOLINK_API_KEY`. Model, pricing, health, and setup facts come from
+the versioned GroAPI Canonical Catalog with an explicitly labeled fallback.
 
 ## Supported Models (60+)
 

@@ -13,6 +13,9 @@ export interface ChatResponse {
   content: string;
   model: string;
   requestId?: string;
+  catalogVersion?: string;
+  catalogSource?: string;
+  warning?: string;
   usage?: {
     inputTokens: number;
     outputTokens: number;

@@ -1,6 +1,6 @@
 {
   "name": "@evolinkai/evolink-media-beta",
-  "version": "1.2.1",
+  "version": "1.3.0",
   "description": "EvoLink Media MCP Server (Beta channel) — AI media generation with 60+ models.",
   "type": "module",
   "main": "dist/evolink-media-beta/src/index.js",

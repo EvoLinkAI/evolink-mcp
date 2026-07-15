@@ -9,12 +9,25 @@ export function createConfig(): RouterConfig {
 }
 
 export function getApiKey(): string {
-  const key = process.env.EVOLINK_API_KEY ?? '';
-  if (!key) {
-    throw new Error(
-      'EVOLINK_API_KEY environment variable is required. ' +
-      'Get your API key at https://evolink.ai/dashboard/keys'
-    );
+  const configured = process.env.EVOLINK_API_KEY?.trim();
+  if (configured) return configured;
+
+  const helper = process.env.EVOLINK_CREDENTIAL_HELPER?.trim() || 'evolink';
+  if (helper.includes('\0')) throw new Error('EVOLINK_CREDENTIAL_HELPER is invalid');
+  try {
+    const key = execFileSync(helper, ['credential', 'get'], {
+      encoding: 'utf8',
+      timeout: 5_000,
+      maxBuffer: 64 * 1024,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    }).trim();
+    if (key) return key;
+  } catch {
+    // Return one stable recovery message without echoing helper stderr or key material.
   }
-  return key;
+  throw new Error(
+    'No EvoLink Agent Key is available. Run `evolink login`, keep the evolink CLI on PATH, ' +
+    'or set EVOLINK_CREDENTIAL_HELPER to its absolute path.'
+  );
 }
+import { execFileSync } from 'node:child_process';

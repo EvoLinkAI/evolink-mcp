@@ -22,6 +22,7 @@ interface RequestOptions {
   body?: Record<string, unknown>;
   idempotencyKey?: string;
   tool?: string;
+  catalogVersion?: string;
 }
 
 export interface TaskResponse {
@@ -132,6 +133,7 @@ async function rawRequest(
     headers['Idempotency-Key'] = options.idempotencyKey;
     headers['X-Evo-Run-Id'] = options.idempotencyKey;
   }
+  if (options.catalogVersion) headers['X-Catalog-Version'] = options.catalogVersion;
 
   let response: Response;
   try {

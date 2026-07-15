@@ -3,6 +3,7 @@ import type { RouterConfig } from '../config.js';
 import { getApiKey } from '../config.js';
 import { findModel } from '../data/text-models.js';
 import { getAdapter, type ChatRequest, type ChatResponse } from './api-adapters.js';
+import { catalogApiFormat, getTextCatalog } from './catalog-client.js';
 import { formatApiError } from './error-handler.js';
 
 const DEFAULT_WRITE_TIMEOUT_MS = 120_000;
@@ -55,12 +56,32 @@ async function rawChatRequest(
   config: RouterConfig,
   req: ChatRequest,
 ): Promise<ChatResponse> {
-  const model = findModel(req.model);
-  if (!model) {
-    throw new Error(`Unknown model: "${req.model}". Use list_text_models to see available models.`);
+  const fallback = findModel(req.model);
+  let apiFormat = fallback?.apiFormat;
+  let catalogVersion: string | undefined;
+  let catalogSource: string | undefined;
+  let warning: string | undefined;
+  let catalogLoaded = false;
+  try {
+    const catalog = await getTextCatalog();
+    catalogLoaded = true;
+    const requested = req.model.toLowerCase();
+    const model = catalog.data.models.find(value => value.model_id.toLowerCase() === requested || value.aliases.some(alias => alias.toLowerCase() === requested));
+    if (!model || model.lifecycle === 'retired') {
+      throw new Error(`Unknown or retired canonical model: "${req.model}". Use list_text_models to see available models.`);
+    }
+    apiFormat = catalogApiFormat(model);
+    catalogVersion = catalog.data.meta.catalog_version;
+    catalogSource = catalog.source;
+    warning = catalog.warning;
+  } catch (error) {
+    if (catalogLoaded || !fallback) throw error;
+    warning = `Canonical Catalog is unavailable; using bundled protocol metadata for ${fallback.name}.`;
+    catalogSource = 'bundled-fallback';
   }
+  if (!apiFormat) throw new Error(`No supported protocol is available for "${req.model}".`);
 
-  const adapter = getAdapter(model.apiFormat);
+  const adapter = getAdapter(apiFormat);
   const { path, body } = adapter.buildRequest(req);
   const url = `${config.baseUrl}${path}`;
   const runId = `run_${randomUUID().replaceAll('-', '')}`;
@@ -93,7 +114,10 @@ async function rawChatRequest(
   if (!response.ok) {
     throw new ApiHttpError(response.status, formatApiError(response.status, data), responseRequestId);
   }
-  return { ...adapter.parseResponse(data), requestId: responseRequestId };
+  return {
+    ...adapter.parseResponse(data), requestId: responseRequestId,
+    catalogVersion, catalogSource, warning,
+  };
 }
 
 /** Send exactly one paid chat POST. Network and timeout failures are never retried automatically. */

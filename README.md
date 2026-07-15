@@ -99,6 +99,8 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 | `upload_file` | Upload explicitly confirmed media | file URL / file ID |
 | `list_files` | List files and quota | file list / quota |
 | `delete_file` | Permanently delete a confirmed file | deletion receipt |
+| `model_health` | Read canonical model availability | versioned health |
+| `mcp_setup` | Read secret-free setup facts | setup / warnings |
 
 All generation tools are **async** — they return a `task_id` immediately. Use `check_task` to poll until completion.
 
@@ -118,6 +120,14 @@ All generation tools are **async** — they return a `task_id` immediately. Use 
 - Router `delegate` requires `confirm_paid_request=true`. `cascade` defaults to
   one paid step; multiple steps require an explicit cap and confirmation and
   return aggregate token usage plus request IDs.
+- Model discovery, unit pricing, health, setup facts, execution validation, and
+  router protocol selection use the versioned GroAPI Canonical Catalog. A
+  five-minute in-process cache is used normally; stale or bundled fallback is
+  labeled explicitly and is never presented as current pricing.
+- `EVOLINK_API_KEY` remains backward compatible. New CLI-managed installs set
+  `EVOLINK_CREDENTIAL_HELPER` to an absolute `evolink` executable; the MCP
+  server invokes only `credential get` without a shell, so no key is serialized
+  in host configuration.
 
 ## Supported Models
 

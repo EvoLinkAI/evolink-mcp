@@ -2,15 +2,16 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ServerConfig } from '../config.js';
 import { apiRequest, formatUsageInfo } from '../services/api-client.js';
-import { getModelNames } from '../data/models.js';
+import { findModel, getModelNames } from '../data/models.js';
+import { CatalogModelUnavailableError, resolveCatalogModel } from '../services/catalog-client.js';
 
 export function registerGenerateVideo(server: McpServer, config: ServerConfig): void {
   const modelNames = getModelNames('video');
 
   const schema = {
     prompt: z.string().max(5000).describe('Video description prompt'),
-    model: z.enum(modelNames).default(modelNames[0])
-      .describe('Video generation model'),
+    model: z.string().default(modelNames[0])
+      .describe('Canonical video model ID; validated against EvoLink Catalog at invocation time'),
     duration: z.number().int().min(3).max(15).optional()
       .describe('Video duration in seconds. Range depends on model'),
     quality: z.enum(['480p', '720p', '1080p', '4k']).optional()
@@ -33,6 +34,19 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
     async (params) => {
       const { generate_audio, confirm_cost: _confirmed, ...rest } = params;
       const body: Record<string, unknown> = { ...rest };
+      let catalogVersion: string | undefined;
+      let catalogWarning: string | undefined;
+      try {
+        const resolved = await resolveCatalogModel(params.model, 'video');
+        body.model = resolved.model.model_id;
+        catalogVersion = resolved.data.meta.catalog_version;
+        catalogWarning = resolved.warning;
+      } catch (error) {
+        if (error instanceof CatalogModelUnavailableError || !findModel(params.model)) {
+          return { content: [{ type: 'text' as const, text: error instanceof Error ? error.message : 'Model validation failed' }], isError: true };
+        }
+        catalogWarning = `Canonical Catalog is unavailable; using bundled model metadata for ${params.model}.`;
+      }
 
       if (generate_audio !== undefined) {
         body.generate_audio = generate_audio;
@@ -43,6 +57,7 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
         path: '/v1/videos/generations',
         body,
         tool: 'generate_video',
+        catalogVersion,
       });
 
       const estimatedTime = task.task_info?.estimated_time ?? 180;
@@ -55,6 +70,8 @@ export function registerGenerateVideo(server: McpServer, config: ServerConfig): 
         `Estimated time: ~${estimatedTime}s`,
       ];
       if (task.request_id) lines.push(`Request ID: ${task.request_id}`);
+      if (catalogVersion) lines.push(`Catalog: ${catalogVersion}`);
+      if (catalogWarning) lines.push(`Warning: ${catalogWarning}`);
       if (usageInfo) lines.push(usageInfo);
       lines.push('', `Use check_task with task_id "${task.id}" to poll progress.`);
       lines.push(`Recommended polling interval: 10-15 seconds.`);

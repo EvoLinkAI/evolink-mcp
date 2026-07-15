@@ -19,6 +19,11 @@ import {
   validateUploadDestination,
 } from '../packages/evolink-media/dist/core/src/services/upload-policy.js';
 import { fileBase64Upload } from '../packages/evolink-media/dist/core/src/services/file-client.js';
+import {
+  getCatalogModels,
+  getCatalogPricing,
+  resetCatalogCacheForTests,
+} from '../packages/evolink-media/dist/core/src/services/catalog-client.js';
 import { registerDeleteFile } from '../packages/evolink-media/dist/core/src/tools/delete-file.js';
 import { registerGenerateImage } from '../packages/evolink-media/dist/core/src/tools/generate-image.js';
 import { registerUploadFile } from '../packages/evolink-media/dist/core/src/tools/upload-file.js';
@@ -28,18 +33,25 @@ import {
 } from '../packages/evolink-router/dist/services/api-client.js';
 import { registerCascade } from '../packages/evolink-router/dist/tools/cascade.js';
 import { registerDelegate } from '../packages/evolink-router/dist/tools/delegate.js';
+import { resetTextCatalogForTests } from '../packages/evolink-router/dist/services/catalog-client.js';
 
 const originalFetch = globalThis.fetch;
 const originalKey = process.env.EVOLINK_API_KEY;
+const originalControlBase = process.env.EVOLINK_CONTROL_BASE;
 
 test.beforeEach(() => {
   process.env.EVOLINK_API_KEY = 'sk-test-only';
+  delete process.env.EVOLINK_CONTROL_BASE;
+  resetCatalogCacheForTests();
+  resetTextCatalogForTests();
 });
 
 test.afterEach(() => {
   globalThis.fetch = originalFetch;
   if (originalKey === undefined) delete process.env.EVOLINK_API_KEY;
   else process.env.EVOLINK_API_KEY = originalKey;
+  if (originalControlBase === undefined) delete process.env.EVOLINK_CONTROL_BASE;
+  else process.env.EVOLINK_CONTROL_BASE = originalControlBase;
 });
 
 test('paid media POST sends an idempotency key but never retries HTTP or transport failures', async () => {
@@ -101,6 +113,37 @@ test('read polling honors retry policy while retaining request evidence', async 
   assert.equal(parseRetryAfter('2'), 2_000);
 });
 
+test('canonical Catalog is primary, versioned, and cached by request shape', async () => {
+  process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
+  let calls = 0;
+  globalThis.fetch = async url => {
+    calls++;
+    const path = new URL(url).pathname;
+    if (path === '/v1/catalog/models') {
+      return new Response(JSON.stringify({
+        meta: { schema_version: '1', catalog_version: 'cat_42', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
+        models: [{ model_id: 'gpt-image-live', display_name: 'Live Image', provider: 'EvoLink', aliases: [], capabilities: ['image'], protocols: ['openai-images'], lifecycle: 'active' }],
+      }), { status: 200, headers: { 'content-type': 'application/json', etag: '"cat_42"' } });
+    }
+    if (path === '/v1/catalog/pricing') {
+      return new Response(JSON.stringify({
+        meta: { schema_version: '1', catalog_version: 'cat_42', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
+        prices: [{ sku_id: 'sku_1', model_id: 'gpt-image-live', role: 'request', currency: 'USD', unit: '/request', price: '0.01', effective_at: '2026-07-15T12:00:00Z' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    return new Response('{}', { status: 404, headers: { 'content-type': 'application/json' } });
+  };
+  const first = await getCatalogModels('image', 'active');
+  const second = await getCatalogModels('image', 'active');
+  const pricing = await getCatalogPricing('gpt-image-live');
+  assert.equal(first.source, 'live');
+  assert.equal(second.source, 'cache');
+  assert.equal(first.data.meta.catalog_version, 'cat_42');
+  assert.equal(first.data.models[0].model_id, 'gpt-image-live');
+  assert.equal(pricing.data.prices[0].price, '0.01');
+  assert.equal(calls, 2);
+});
+
 test('file write is also single-attempt and carries an idempotency key', async () => {
   let calls = 0;
   let key = '';
@@ -118,9 +161,16 @@ test('file write is also single-attempt and carries an idempotency key', async (
 });
 
 test('router paid POST is single-attempt and blocks cascade-style retry on unknown outcome', async () => {
-  let calls = 0;
-  globalThis.fetch = async () => {
-    calls++;
+  process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
+  let paidCalls = 0;
+  globalThis.fetch = async url => {
+    if (new URL(url).hostname === 'control.example') {
+      return new Response(JSON.stringify({
+        meta: { schema_version: '1', catalog_version: 'cat_router', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
+        models: [{ model_id: 'claude-haiku-4-5-20251001', display_name: 'Haiku', provider: 'Anthropic', aliases: [], capabilities: ['text'], protocols: ['anthropic-messages'], lifecycle: 'active' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    paidCalls++;
     throw new TypeError('connection reset');
   };
   await assert.rejects(
@@ -129,7 +179,33 @@ test('router paid POST is single-attempt and blocks cascade-style retry on unkno
     }),
     RouterOutcomeUnknownError,
   );
-  assert.equal(calls, 1);
+  assert.equal(paidCalls, 1);
+});
+
+test('router resolves a new model and protocol from canonical Catalog', async () => {
+  process.env.EVOLINK_CONTROL_BASE = 'https://control.example';
+  let paidPath = '';
+  globalThis.fetch = async (url, init) => {
+    const parsed = new URL(url);
+    if (parsed.hostname === 'control.example') {
+      return new Response(JSON.stringify({
+        meta: { schema_version: '1', catalog_version: 'cat_new', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
+        models: [{ model_id: 'new-live-model', display_name: 'New Live', provider: 'Example', aliases: ['new-alias'], capabilities: ['text'], protocols: ['openai-chat-completions'], lifecycle: 'active' }],
+      }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }
+    paidPath = parsed.pathname;
+    assert.match(new Headers(init.headers).get('idempotency-key') ?? '', /^run_/);
+    return new Response(JSON.stringify({
+      model: 'new-live-model', choices: [{ message: { content: 'ok' } }], usage: { prompt_tokens: 2, completion_tokens: 1 },
+    }), { status: 200, headers: { 'content-type': 'application/json', 'x-request-id': 'req_new' } });
+  };
+  const response = await chatRequest({ baseUrl: 'https://direct.example' }, {
+    model: 'new-alias', prompt: 'hello', maxTokens: 16,
+  });
+  assert.equal(paidPath, '/v1/chat/completions');
+  assert.equal(response.catalogVersion, 'cat_new');
+  assert.equal(response.requestId, 'req_new');
+  assert.equal(response.usage.outputTokens, 1);
 });
 
 test('local upload policy enforces allowlist, resolved path, size, and MIME signature', async () => {

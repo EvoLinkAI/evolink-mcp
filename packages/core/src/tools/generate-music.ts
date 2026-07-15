@@ -2,7 +2,8 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ServerConfig } from '../config.js';
 import { apiRequest, formatUsageInfo } from '../services/api-client.js';
-import { getModelNames } from '../data/models.js';
+import { findModel, getModelNames } from '../data/models.js';
+import { CatalogModelUnavailableError, resolveCatalogModel } from '../services/catalog-client.js';
 
 export function registerGenerateMusic(server: McpServer, config: ServerConfig): void {
   const modelNames = getModelNames('music');
@@ -11,8 +12,8 @@ export function registerGenerateMusic(server: McpServer, config: ServerConfig): 
     prompt: z.string().max(5000).describe(
       'In simple mode: music description (max 500 chars). In custom mode: lyrics with tags like [Verse], [Chorus] (max 3000 for v4, 5000 for v4.5+)',
     ),
-    model: z.enum(modelNames).default(modelNames[0])
-      .describe('Music generation model'),
+    model: z.string().default(modelNames[0])
+      .describe('Canonical audio model ID; validated against EvoLink Catalog at invocation time'),
     custom_mode: z.boolean()
       .describe('false = simple mode (AI generates lyrics/style from prompt). true = custom mode (you control style, title, lyrics)'),
     instrumental: z.boolean()
@@ -38,11 +39,25 @@ export function registerGenerateMusic(server: McpServer, config: ServerConfig): 
     { readOnlyHint: false, destructiveHint: false, idempotentHint: false, openWorldHint: true },
     async (params) => {
       const { confirm_cost: _confirmed, ...body } = params;
+      let catalogVersion: string | undefined;
+      let catalogWarning: string | undefined;
+      try {
+        const resolved = await resolveCatalogModel(params.model, 'audio');
+        body.model = resolved.model.model_id;
+        catalogVersion = resolved.data.meta.catalog_version;
+        catalogWarning = resolved.warning;
+      } catch (error) {
+        if (error instanceof CatalogModelUnavailableError || !findModel(params.model)) {
+          return { content: [{ type: 'text' as const, text: error instanceof Error ? error.message : 'Model validation failed' }], isError: true };
+        }
+        catalogWarning = `Canonical Catalog is unavailable; using bundled model metadata for ${params.model}.`;
+      }
       const task = await apiRequest(config, {
         method: 'POST',
         path: '/v1/audios/generations',
         body: body as Record<string, unknown>,
         tool: 'generate_music',
+        catalogVersion,
       });
 
       const estimatedTime = task.task_info?.estimated_time ?? 90;
@@ -55,6 +70,8 @@ export function registerGenerateMusic(server: McpServer, config: ServerConfig): 
         `Estimated time: ~${estimatedTime}s`,
       ];
       if (task.request_id) lines.push(`Request ID: ${task.request_id}`);
+      if (catalogVersion) lines.push(`Catalog: ${catalogVersion}`);
+      if (catalogWarning) lines.push(`Warning: ${catalogWarning}`);
       if (usageInfo) lines.push(usageInfo);
       lines.push('', `Use check_task with task_id "${task.id}" to poll progress.`);
       lines.push(`Recommended polling interval: 5-10 seconds.`);

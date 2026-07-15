@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { TEXT_MODELS, type Tier } from '../data/text-models.js';
+import { getTextCatalog } from '../services/catalog-client.js';
 
 // --- Pattern-based routing rules ---
 
@@ -38,15 +39,22 @@ interface RouteResult {
   alternatives: string[];
 }
 
-function analyzeTask(prompt: string): RouteResult {
+function analyzeTask(prompt: string, available?: Set<string>): RouteResult {
   const hasChinese = containsChinese(prompt);
+
+  const selectModel = (tier: Tier, preferred: string): string => {
+    if (!available || available.has(preferred)) return preferred;
+    return TEXT_MODELS.find(model => model.tier === tier && available.has(model.name))?.name
+      ?? available.values().next().value
+      ?? preferred;
+  };
 
   // Check Tier 3 first (most specific)
   for (const pattern of TIER3_PATTERNS) {
     if (pattern.test(prompt)) {
-      const model = hasChinese ? 'claude-opus-4-6' : 'claude-opus-4-6';
+      const model = selectModel(3, hasChinese ? 'claude-opus-4-6' : 'claude-opus-4-6');
       const alts = TEXT_MODELS
-        .filter(m => m.tier === 3 && m.name !== model)
+        .filter(m => m.tier === 3 && m.name !== model && (!available || available.has(m.name)))
         .slice(0, 3)
         .map(m => m.name);
       return {
@@ -61,9 +69,9 @@ function analyzeTask(prompt: string): RouteResult {
   // Check Tier 1 (lightweight)
   for (const pattern of TIER1_PATTERNS) {
     if (pattern.test(prompt)) {
-      const model = hasChinese ? 'doubao-seed-2.0-mini' : 'claude-haiku-4-5-20251001';
+      const model = selectModel(1, hasChinese ? 'doubao-seed-2.0-mini' : 'claude-haiku-4-5-20251001');
       const alts = TEXT_MODELS
-        .filter(m => m.tier === 1 && m.name !== model)
+        .filter(m => m.tier === 1 && m.name !== model && (!available || available.has(m.name)))
         .slice(0, 3)
         .map(m => m.name);
       return {
@@ -76,9 +84,9 @@ function analyzeTask(prompt: string): RouteResult {
   }
 
   // Default: Tier 2
-  const model = hasChinese ? 'claude-sonnet-4-6' : 'claude-sonnet-4-6';
+  const model = selectModel(2, hasChinese ? 'claude-sonnet-4-6' : 'claude-sonnet-4-6');
   const alts = TEXT_MODELS
-    .filter(m => m.tier === 2 && m.name !== model)
+    .filter(m => m.tier === 2 && m.name !== model && (!available || available.has(m.name)))
     .slice(0, 3)
     .map(m => m.name);
   return {
@@ -100,7 +108,18 @@ export function registerSmartRoute(server: McpServer): void {
     'Analyze a task and recommend the best model + tier (does NOT execute the task). Use this to preview routing before calling delegate.',
     schema,
     async (params) => {
-      const result = analyzeTask(params.prompt);
+      let available: Set<string> | undefined;
+      let catalogLabel = 'bundled policy fallback';
+      let warning: string | undefined;
+      try {
+        const catalog = await getTextCatalog();
+        available = new Set(catalog.data.models.filter(model => model.lifecycle !== 'retired').map(model => model.model_id));
+        catalogLabel = `${catalog.data.meta.catalog_version} (${catalog.source})`;
+        warning = catalog.warning;
+      } catch {
+        warning = 'Canonical Catalog is unavailable; recommendations may be stale.';
+      }
+      const result = analyzeTask(params.prompt, available);
 
       const modelInfo = TEXT_MODELS.find(m => m.name === result.model);
       const lines = [
@@ -108,12 +127,14 @@ export function registerSmartRoute(server: McpServer): void {
         `Recommended model: ${result.model}`,
         `Provider: ${modelInfo?.provider ?? 'Unknown'}`,
         `Reason: ${result.reason}`,
+        `Catalog: ${catalogLabel}`,
         '',
         `Alternatives: ${result.alternatives.join(', ') || 'none'}`,
         '',
         'To execute, use: delegate(prompt=..., model="' + result.model + '")',
         'Or use: cascade(prompt=...) for automatic quality assurance.',
       ];
+      if (warning) lines.push(`Warning: ${warning}`);
 
       return {
         content: [{ type: 'text' as const, text: lines.join('\n') }],

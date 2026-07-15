@@ -9,13 +9,15 @@ import { registerCheckTask } from './tools/check-task.js';
 import { registerUploadFile } from './tools/upload-file.js';
 import { registerDeleteFile } from './tools/delete-file.js';
 import { registerListFiles } from './tools/list-files.js';
+import { registerModelHealth } from './tools/model-health.js';
+import { registerMCPSetup } from './tools/mcp-setup.js';
 
 export { type ServerConfig, createConfig, getApiKey } from './config.js';
 
 export function createServer(config: ServerConfig): McpServer {
   const server = new McpServer({
     name: config.channel === 'beta' ? 'evolink-media-beta' : 'evolink-media',
-    version: '1.2.0',
+    version: '1.3.0',
   });
 
   registerGenerateImage(server, config);
@@ -27,6 +29,8 @@ export function createServer(config: ServerConfig): McpServer {
   registerUploadFile(server);
   registerDeleteFile(server);
   registerListFiles(server);
+  registerModelHealth(server);
+  registerMCPSetup(server);
 
   return server;
 }

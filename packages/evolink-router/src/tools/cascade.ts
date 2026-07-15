@@ -3,6 +3,7 @@ import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RouterConfig } from '../config.js';
 import { PaidRequestOutcomeUnknownError, chatRequest } from '../services/api-client.js';
 import { CASCADE_CHAIN, findModel } from '../data/text-models.js';
+import { getTextCatalog } from '../services/catalog-client.js';
 
 type Confidence = 'high' | 'medium' | 'low';
 
@@ -48,7 +49,22 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
         };
       }
       const augmentedPrompt = params.prompt + CONFIDENCE_SUFFIX;
-      const chain = [...CASCADE_CHAIN].slice(0, params.max_steps);
+      let catalogWarning: string | undefined;
+      let catalogVersion: string | undefined;
+      let chain = [...CASCADE_CHAIN];
+      try {
+        const catalog = await getTextCatalog();
+        const available = new Set(catalog.data.models.filter(model => model.lifecycle !== 'retired').map(model => model.model_id));
+        chain = chain.filter(model => available.has(model));
+        catalogVersion = catalog.data.meta.catalog_version;
+        catalogWarning = catalog.warning;
+      } catch {
+        catalogWarning = 'Canonical Catalog is unavailable; cascade is using its bundled policy chain.';
+      }
+      chain = chain.slice(0, params.max_steps);
+      if (chain.length === 0) {
+        return { content: [{ type: 'text' as const, text: 'Cascade refused: no policy-chain model is currently available in canonical Catalog.' }], isError: true };
+      }
       const attempts: string[] = [];
       const requestIds: string[] = [];
       let aggregateInputTokens = 0;
@@ -87,6 +103,8 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
             }
             lines.push(`Aggregate tokens (${i + 1} paid step${i === 0 ? '' : 's'}): ${aggregateInputTokens} in / ${aggregateOutputTokens} out`);
             if (requestIds.length > 0) lines.push(`Request IDs: ${requestIds.join(', ')}`);
+            if (catalogVersion) lines.push(`Catalog: ${catalogVersion}`);
+            if (catalogWarning) lines.push(`Warning: ${catalogWarning}`);
             return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
           }
 
@@ -107,6 +125,8 @@ export function registerCascade(server: McpServer, config: RouterConfig): void {
             }
             lines.push(`Aggregate tokens (${i + 1} paid step${i === 0 ? '' : 's'}): ${aggregateInputTokens} in / ${aggregateOutputTokens} out`);
             if (requestIds.length > 0) lines.push(`Request IDs: ${requestIds.join(', ')}`);
+            if (catalogVersion) lines.push(`Catalog: ${catalogVersion}`);
+            if (catalogWarning) lines.push(`Warning: ${catalogWarning}`);
             return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
           }
 

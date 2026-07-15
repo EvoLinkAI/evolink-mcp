@@ -46,9 +46,9 @@ Choose **Beta** for experimentation. Choose **Official** for production workload
 
 ## Available Tools
 
-Same 9 tools as the official version: `generate_image`, `generate_video`,
+Same 11 tools as the official version: `generate_image`, `generate_video`,
 `generate_music`, `list_models`, `estimate_cost`, `check_task`, `upload_file`,
-`list_files`, and `delete_file`.
+`list_files`, `delete_file`, `model_health`, and `mcp_setup`.
 
 Paid generation tools require `confirm_cost=true` and never retry POSTs
 automatically. File operations use the same explicit upload-directory and

@@ -2,14 +2,12 @@ import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { RouterConfig } from '../config.js';
 import { chatRequest } from '../services/api-client.js';
-import { getModelNames, findModel } from '../data/text-models.js';
+import { findModel } from '../data/text-models.js';
 
 export function registerDelegate(server: McpServer, config: RouterConfig): void {
-  const modelNames = getModelNames();
-
   const schema = {
     prompt: z.string().max(100000).describe('The prompt / message to send to the model'),
-    model: z.enum(modelNames).describe('Target text model name'),
+    model: z.string().describe('Canonical target text model ID or alias; resolved from EvoLink Catalog at invocation time'),
     system_prompt: z.string().max(10000).optional()
       .describe('Optional system prompt to set model behavior'),
     max_tokens: z.number().int().min(1).max(128000).optional()
@@ -39,6 +37,8 @@ export function registerDelegate(server: McpServer, config: RouterConfig): void 
         meta.push(`Tokens: ${response.usage.inputTokens} in / ${response.usage.outputTokens} out`);
       }
       if (response.requestId) meta.push(`Request ID: ${response.requestId}`);
+      if (response.catalogVersion) meta.push(`Catalog: ${response.catalogVersion} (${response.catalogSource})`);
+      if (response.warning) meta.push(`Warning: ${response.warning}`);
       if (meta.length > 0) {
         lines.push('', '---', ...meta);
       }

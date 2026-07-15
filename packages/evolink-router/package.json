@@ -1,6 +1,6 @@
 {
   "name": "@evolinkai/evolink-router",
-  "version": "1.0.0",
+  "version": "1.1.0",
   "description": "Smart LLM router MCP server. Route prompts to 20+ text models (Claude, GPT, Gemini, DeepSeek) with cascade strategy to cut costs 40-50%.",
   "type": "module",
   "main": "dist/index.js",
