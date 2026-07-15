@@ -1,8 +1,11 @@
 import assert from 'node:assert/strict';
 import { mkdtemp, mkdir, symlink, writeFile } from 'node:fs/promises';
+import { createServer as createHTTPServer } from 'node:http';
 import { tmpdir } from 'node:os';
 import { delimiter, join } from 'node:path';
 import test from 'node:test';
+import { Client } from '@modelcontextprotocol/sdk/client/index.js';
+import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';
 
 import {
   apiRequest,
@@ -271,4 +274,50 @@ test('MCP paid and destructive tools expose mandatory confirmations and annotati
   const cascade = byName('cascade');
   assert.equal(cascade[2].max_steps.parse(undefined), 1);
   assert.equal(cascade[2].confirm_paid_requests.safeParse(false).success, false);
+});
+
+test('real stdio MCP handshake exposes dynamic Catalog tools', async () => {
+  const control = createHTTPServer((request, response) => {
+    if (request.url?.startsWith('/v1/catalog/models')) {
+      response.setHeader('content-type', 'application/json');
+      response.end(JSON.stringify({
+        meta: { schema_version: '1', catalog_version: 'cat_stdio', updated_at: '2026-07-15T12:00:00Z', fresh_until: '2026-07-15T12:05:00Z' },
+        models: [{ model_id: 'stdio-image', display_name: 'Stdio Image', provider: 'EvoLink', aliases: [], capabilities: ['image'], protocols: ['openai-images'], lifecycle: 'active' }],
+      }));
+      return;
+    }
+    response.statusCode = 404;
+    response.end('{}');
+  });
+  await new Promise((resolve, reject) => {
+    control.once('error', reject);
+    control.listen(0, '127.0.0.1', resolve);
+  });
+  const address = control.address();
+  const controlBase = `http://127.0.0.1:${address.port}`;
+  const transport = new StdioClientTransport({
+    command: process.execPath,
+    args: ['packages/evolink-media/dist/evolink-media/src/index.js'],
+    cwd: process.cwd(),
+    env: {
+      EVOLINK_API_KEY: 'sk-stdio-test',
+      EVOLINK_CONTROL_BASE: controlBase,
+      EVOLINK_MCP_READ_TIMEOUT_MS: '5000',
+    },
+    stderr: 'pipe',
+  });
+  const client = new Client({ name: 'evolink-safety-test', version: '1.0.0' });
+  try {
+    await client.connect(transport);
+    const tools = await client.listTools();
+    assert.ok(tools.tools.some(tool => tool.name === 'model_health'));
+    assert.ok(tools.tools.some(tool => tool.name === 'mcp_setup'));
+    const result = await client.callTool({ name: 'list_models', arguments: { category: 'image' } });
+    const text = result.content.find(item => item.type === 'text')?.text ?? '';
+    assert.match(text, /stdio-image/);
+    assert.match(text, /cat_stdio/);
+  } finally {
+    await client.close();
+    await new Promise(resolve => control.close(resolve));
+  }
 });
