@@ -1,0 +1,30 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "ai.evolink/evolink-media",
+  "description": "Generate AI videos, images & music with one API key. 60+ models (Sora, Kling, Veo, Seedance, GPT Image, Suno) with live catalog, cost estimates and payment-safe retries.",
+  "version": "1.3.0",
+  "websiteUrl": "https://evolink.ai/agents",
+  "repository": {
+    "url": "https://github.com/Evolink-AI/evolink-media-mcp",
+    "source": "github"
+  },
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "@evolinkai/evolink-media",
+      "version": "1.3.0",
+      "runtimeHint": "npx",
+      "transport": {
+        "type": "stdio"
+      },
+      "environmentVariables": [
+        {
+          "name": "EVOLINK_API_KEY",
+          "description": "EvoLink API key. Create one at https://evolink.ai or via `evolink keys create`.",
+          "isRequired": true,
+          "isSecret": true
+        }
+      ]
+    }
+  ]
+}
