@@ -14,6 +14,7 @@ export function registerListFiles(server: McpServer): void {
     'list_files',
     'List uploaded files and check storage quota. Shows file names, sizes, upload times, and remaining quota. Use delete_file to free quota when needed.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       const [listResult, quotaResult] = await Promise.all([
         fileList(params.page, params.page_size),

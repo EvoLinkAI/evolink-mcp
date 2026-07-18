@@ -63,6 +63,7 @@ export function registerCheckTask(server: McpServer, config: ServerConfig): void
     'check_task',
     'Check status and get results of an async task (video/music generation). Returns progress, status, and result URLs.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       const task = await queryTask(config, params.task_id);
       return { content: [{ type: 'text' as const, text: formatTaskResult(task) }] };

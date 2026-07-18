@@ -107,6 +107,7 @@ export function registerSmartRoute(server: McpServer): void {
     'smart_route',
     'Analyze a task and recommend the best model + tier (does NOT execute the task). Use this to preview routing before calling delegate.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       let available: Set<string> | undefined;
       let catalogLabel = 'bundled policy fallback';

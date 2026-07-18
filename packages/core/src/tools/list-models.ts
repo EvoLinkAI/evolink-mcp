@@ -13,6 +13,7 @@ export function registerListModels(server: McpServer): void {
     'list_models',
     'List available AI models with features. Use to help users choose the right model.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       const capability = params.category === 'music' ? 'audio' : params.category === 'all' ? undefined : params.category;
       try {

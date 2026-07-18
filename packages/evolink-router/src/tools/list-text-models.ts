@@ -19,6 +19,7 @@ export function registerListTextModels(server: McpServer): void {
     'list_text_models',
     'List available text models grouped by tier. Use this to discover models before calling delegate or cascade.',
     schema,
+    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
     async (params) => {
       const tier = params.tier as Tier | undefined;
       try {
