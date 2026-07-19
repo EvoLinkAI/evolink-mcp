@@ -10,10 +10,32 @@ const BASE_URLS = {
   beta: 'https://beta-api.evolink.ai',
 } as const;
 
+
+/**
+ * EVOLINK_BASE_URL overrides the channel default so the same build can point
+ * at canary/staging gateways (e.g. https://t-api.evolink.ai) without patching
+ * dist. HTTPS is required except for loopback development hosts.
+ */
+function resolveBaseUrl(channel: 'official' | 'beta'): string {
+  const override = (process.env.EVOLINK_BASE_URL ?? '').trim().replace(/\/+$/, '');
+  if (!override) return BASE_URLS[channel];
+  let parsed: URL;
+  try {
+    parsed = new URL(override);
+  } catch {
+    throw new Error(`EVOLINK_BASE_URL is not a valid URL: ${override}`);
+  }
+  const loopback = parsed.hostname === 'localhost' || parsed.hostname === '127.0.0.1';
+  if (parsed.protocol !== 'https:' && !(parsed.protocol === 'http:' && loopback)) {
+    throw new Error('EVOLINK_BASE_URL must use HTTPS (or HTTP on localhost).');
+  }
+  return override;
+}
+
 export function createConfig(channel: 'official' | 'beta'): ServerConfig {
   return {
     channel,
-    baseUrl: BASE_URLS[channel],
+    baseUrl: resolveBaseUrl(channel),
   };
 }
 
