@@ -7,7 +7,7 @@ import { registerListTextModels } from './tools/list-text-models.js';
 
 export function createServer(config: RouterConfig): McpServer {
   const server = new McpServer({
-    name: 'evolink-router',
+    name: 'evolink-mcp-router',
     version: '1.0.0',
   });
 

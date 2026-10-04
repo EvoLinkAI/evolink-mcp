@@ -4,7 +4,7 @@
 
 One unified MCP server, 60+ AI models — Sora, Kling, Veo, Seedance, Suno, GPT Image, and more. Works with Claude Desktop, Claude Code, Cursor, Windsurf, and any MCP-compatible client.
 
-[![npm](https://img.shields.io/npm/v/@evolinkai/evolink-media)](https://www.npmjs.com/package/@evolinkai/evolink-media)
+[![npm](https://img.shields.io/npm/v/@evolinkai/mcp)](https://www.npmjs.com/package/@evolinkai/mcp)
 
 ## EvoLink Quick Start
 
@@ -14,7 +14,7 @@ Use this MCP as the tool-calling entry point for EvoLink media models:
   <a href="https://evolink.ai/models?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>Model Page</strong></a> &nbsp;·&nbsp;
   <a href="https://docs.evolink.ai?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>Docs</strong></a> &nbsp;·&nbsp;
   <a href="https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp"><strong>API Key</strong></a> &nbsp;·&nbsp;
-  <a href="https://www.npmjs.com/package/@evolinkai/evolink-media"><strong>npm</strong></a> &nbsp;·&nbsp;
+  <a href="https://www.npmjs.com/package/@evolinkai/mcp"><strong>npm</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/EvoLinkAI/awesome-gpt-image-2-API-and-Prompts"><strong>GPT Image Prompts</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/EvoLinkAI/awesome-seedance-2.5-prompts"><strong>Seedance Prompts</strong></a> &nbsp;·&nbsp;
   <a href="https://github.com/EvoLinkAI/awesome-suno-api"><strong>Suno Guide</strong></a>
@@ -45,9 +45,9 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ```json
 {
   "mcpServers": {
-    "evolink-media": {
+    "evolink-mcp": {
       "command": "npx",
-      "args": ["-y", "@evolinkai/evolink-media@latest"],
+      "args": ["-y", "@evolinkai/mcp@latest"],
       "env": {
         "EVOLINK_API_KEY": "your-key-here",
         "EVOLINK_UPLOAD_ALLOWED_DIRS": "/absolute/path/to/media"
@@ -60,7 +60,7 @@ Add to `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS)
 ### Cursor
 
 Go to **Settings → MCP** and add:
-- Command: `npx -y @evolinkai/evolink-media@latest`
+- Command: `npx -y @evolinkai/mcp@latest`
 - Environment: `EVOLINK_API_KEY=your-key-here`
 
 ### Windsurf
@@ -69,9 +69,9 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 ```json
 {
   "mcpServers": {
-    "evolink-media": {
+    "evolink-mcp": {
       "command": "npx",
-      "args": ["-y", "@evolinkai/evolink-media@latest"],
+      "args": ["-y", "@evolinkai/mcp@latest"],
       "env": {
         "EVOLINK_API_KEY": "your-key-here"
       }
@@ -168,9 +168,9 @@ Use `list_models` to see the full catalog. For pricing, visit [evolink.ai/pricin
 
 ## Two Editions
 
-| | `@evolinkai/evolink-media` | `@evolinkai/evolink-media-beta` |
+| | `@evolinkai/mcp` | `@evolinkai/mcp-beta` |
 |---|---|---|
-| npm | [![npm](https://img.shields.io/npm/v/@evolinkai/evolink-media)](https://www.npmjs.com/package/@evolinkai/evolink-media) | [![npm](https://img.shields.io/npm/v/@evolinkai/evolink-media-beta)](https://www.npmjs.com/package/@evolinkai/evolink-media-beta) |
+| npm | [![npm](https://img.shields.io/npm/v/@evolinkai/mcp)](https://www.npmjs.com/package/@evolinkai/mcp) | [![npm](https://img.shields.io/npm/v/@evolinkai/mcp-beta)](https://www.npmjs.com/package/@evolinkai/mcp-beta) |
 | API Endpoint | api.evolink.ai | api.evolink.ai |
 | SLA | 99.9% | Best-effort |
 | Best for | Production | Experimentation |
@@ -178,8 +178,8 @@ Use `list_models` to see the full catalog. For pricing, visit [evolink.ai/pricin
 ## Development
 
 ```bash
-git clone https://github.com/EvoLinkAI/evolink-media-mcp.git
-cd evolink-media-mcp
+git clone https://github.com/EvoLinkAI/mcp.git
+cd mcp
 npm install
 npm run build
 npm test

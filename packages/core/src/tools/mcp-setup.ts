@@ -18,7 +18,7 @@ export function registerMCPSetup(server: McpServer): void {
         const lines = [
           `Model: ${result.data.model_id}`,
           `Catalog: ${result.data.meta.catalog_version} (${result.source})`,
-          `Command: ${String(result.data.config.command ?? 'evolink-media-mcp')}`,
+          `Command: ${String(result.data.config.command ?? 'evolink-mcp')}`,
           'Credential helper: evolink credential get (the Agent Key is not returned by this tool)',
         ];
         for (const warning of result.data.warnings ?? []) lines.push(`Warning: ${warning}`);

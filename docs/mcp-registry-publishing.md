@@ -12,10 +12,12 @@ H2 2026 路线是 trust manifests 与注册表级信任信号，占位越晚门�
 ## 前置条件（外部执行）
 
 1. **npm 正式发布**：Registry 会校验 npm 包真实存在且 `package.json.mcpName`
-   与 server 名一致。`@evolinkai/evolink-media@1.3.0` 必须先完成 provenance 发布
+   与 server 名一致。`@evolinkai/mcp@1.3.0` 必须先完成 provenance 发布
    （见发布手册 NPM 章节）。
 2. **域名验证**：`ai.evolink/*` 命名空间归属需验证 `evolink.ai` 域名
    （DNS TXT challenge，登录时按 CLI 提示在 Cloudflare 加记录）。
+3. **仓库改名**：GitHub 仓库需先由 EvoLinkAI 改名为 `EvoLinkAI/mcp`。npm provenance
+   会核对 `package.json` 的 `repository` 与实际构建的仓库一致，不改名发布会失败。
 
 ## 发布步骤
 
@@ -36,12 +38,12 @@ mcp-publisher publish
 ## 版本维护
 
 - `server.json.version` 与 npm 包版本保持一致；每次 npm 发版后同步 bump 并重新 publish。
-- 后续把 `@evolinkai/evolink-router` 作为第二个条目（`ai.evolink/evolink-router`）
+- 后续把 `@evolinkai/mcp-router` 作为第二个条目（`ai.evolink/mcp-router`）
   单独建 manifest 发布。
-- 未来切换 remote MCP（streamable-http）时，在 `packages` 旁增加 `remotes` 条目即可，
+- 未来切换 remote MCP（streamable-http）时，在 `packages` 旁增加 `remotes` 条目（`https://mcp.evolink.ai/mcp`）即可，
   同一 server 名平滑演进。
 
 ## 同步动作
 
 官方 Registry 发布后，聚合站（Smithery / PulseMCP / mcp.so）会自动或半自动收录；
-确认收录状态并认领条目，统一指向 https://evolink.ai/agents。
+确认收录状态并认领条目，统一指向 https://evolink.ai/mcp。

@@ -58,8 +58,8 @@ Layer structure inside core:
 
 | Package | Channel | API Base |
 |---------|---------|----------|
-| `evolink-media` | `official` | `https://api.evolink.ai` |
-| `evolink-media-beta` | `beta` | `https://beta-api.evolink.ai` |
+| `@evolinkai/mcp` (`packages/evolink-media`) | `official` | `https://api.evolink.ai` |
+| `@evolinkai/mcp-beta` (`packages/evolink-media-beta`) | `beta` | `https://beta-api.evolink.ai` |
 
 Each entry `index.ts` calls `createConfig('official' | 'beta')` and passes config to `createServer()`.
 

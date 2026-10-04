@@ -28,19 +28,19 @@ jobs:
           npm pack --dry-run --workspace packages/evolink-media-beta
           npm pack --dry-run --workspace packages/evolink-router
 
-      - name: Publish evolink-media
+      - name: Publish @evolinkai/mcp
         working-directory: packages/evolink-media
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish evolink-media-beta
+      - name: Publish @evolinkai/mcp-beta
         working-directory: packages/evolink-media-beta
         run: npm publish --access public --provenance
         env:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
-      - name: Publish evolink-router
+      - name: Publish @evolinkai/mcp-router
         working-directory: packages/evolink-router
         run: npm publish --access public --provenance
         env:

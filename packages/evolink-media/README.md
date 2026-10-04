@@ -1,4 +1,4 @@
-# @evolinkai/evolink-media
+# @evolinkai/mcp
 
 > Generate AI videos, images & music with one API key. 60+ models including Sora, Kling, Veo, Seedance, GPT Image, Suno, and more.
 
@@ -7,7 +7,7 @@
 ## Quick Start
 
 ```bash
-npx @evolinkai/evolink-media
+npx @evolinkai/mcp
 ```
 
 Set your API key:
@@ -24,9 +24,9 @@ Get your API key at [evolink.ai/dashboard/keys](https://evolink.ai/dashboard/key
 ```json
 {
   "mcpServers": {
-    "evolink-media": {
+    "evolink-mcp": {
       "command": "npx",
-      "args": ["-y", "@evolinkai/evolink-media@latest"],
+      "args": ["-y", "@evolinkai/mcp@latest"],
       "env": {
         "EVOLINK_API_KEY": "your-key-here",
         "EVOLINK_UPLOAD_ALLOWED_DIRS": "/absolute/path/to/media"
@@ -39,7 +39,7 @@ Get your API key at [evolink.ai/dashboard/keys](https://evolink.ai/dashboard/key
 ### Cursor
 
 Go to **Settings → MCP** and add:
-- Command: `npx -y @evolinkai/evolink-media@latest`
+- Command: `npx -y @evolinkai/mcp@latest`
 - Environment: `EVOLINK_API_KEY=your-key-here`
 
 ## Available Tools

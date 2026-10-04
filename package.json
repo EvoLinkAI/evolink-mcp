@@ -1,5 +1,5 @@
 {
-  "name": "evolink-media-mcp",
+  "name": "evolinkai-mcp",
   "private": true,
   "workspaces": [
     "packages/core",

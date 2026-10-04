@@ -1,9 +1,9 @@
-# @evolinkai/evolink-router
+# @evolinkai/mcp-router
 
 MCP server for selecting and calling EvoLink text models from the canonical model Catalog.
 
 ```bash
-EVOLINK_API_KEY="your-key" npx -y @evolinkai/evolink-router@latest
+EVOLINK_API_KEY="your-key" npx -y @evolinkai/mcp-router@latest
 ```
 
 `smart_route` is read-only. `delegate` requires `confirm_paid_request=true`.

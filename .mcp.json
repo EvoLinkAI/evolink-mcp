@@ -1,8 +1,8 @@
 {
   "mcpServers": {
-    "evolink-media": {
+    "evolink-mcp": {
       "command": "npx",
-      "args": ["-y", "evolink-media@latest"],
+      "args": ["-y", "@evolinkai/mcp@latest"],
       "env": {
         "EVOLINK_API_KEY": "${input:EVOLINK_API_KEY:Your EvoLink API key from https://evolink.ai/dashboard/keys}"
       }

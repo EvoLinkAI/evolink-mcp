@@ -6,10 +6,10 @@
     "name": "EvoLink AI",
     "email": "support@evolink.ai"
   },
-  "homepage": "https://github.com/EvoLinkAI/evolink-media-mcp",
+  "homepage": "https://evolink.ai/mcp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EvoLinkAI/evolink-media-mcp.git"
+    "url": "https://github.com/EvoLinkAI/mcp.git"
   },
   "license": "MIT",
   "keywords": ["video", "image", "music", "ai", "generation", "sora", "suno", "kling"],
