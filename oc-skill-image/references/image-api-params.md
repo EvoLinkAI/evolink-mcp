@@ -193,7 +193,7 @@ After 5 minutes, inform the user:
 |------|---------|------------|
 | 400 | Bad request — invalid params or content blocked | Check required fields; revise prompt |
 | 401 | Invalid or missing API key | Verify `EVOLINK_API_KEY` at evolink.ai/dashboard/keys |
-| 402 | Insufficient credits | Top up at evolink.ai/dashboard/billing |
+| 402 | Insufficient credits | Top up at evolink.ai/dashboard/credits |
 | 403 | Access denied | Check account permissions |
 | 404 | Resource not found | Verify `task_id` is correct |
 | 413 | Payload too large | Compress images to under 4MB |
@@ -212,7 +212,7 @@ After 5 minutes, inform the user:
 | `image_processing_error` | No | Failed to process input image | Check format (JPG/PNG/WebP), size (<10MB), URL accessibility |
 | `model_unavailable` | No | Model temporarily offline | Call `list_models` to find available alternatives |
 | `generation_timeout` | Yes | Generation exceeded time limit | Retry; simplify prompt or lower resolution if repeated |
-| `quota_exceeded` | Yes | Account credits depleted | Wait, then retry. Top up at evolink.ai/dashboard/billing |
+| `quota_exceeded` | Yes | Account credits depleted | Wait, then retry. Top up at evolink.ai/dashboard/credits |
 | `resource_exhausted` | Yes | Server resources temporarily full | Wait 30–60 seconds and retry |
 | `service_error` | Yes | Internal service error | Retry after 1 minute |
 | `generation_failed_no_content` | Yes | Generation produced no output | Modify prompt and retry |

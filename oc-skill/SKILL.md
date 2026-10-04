@@ -209,7 +209,7 @@ Music has two required fields — always collect both before calling `generate_m
 | Error | What to tell the user |
 |-------|----------------------|
 | 401 Unauthorized | "Your API key isn't working. Check or regenerate it at evolink.ai/dashboard/keys" |
-| 402 Payment Required | "Your account balance is low. Add credits at evolink.ai/dashboard/billing" |
+| 402 Payment Required | "Your account balance is low. Add credits at evolink.ai/dashboard/credits" |
 | 429 Rate Limited | "Too many requests — let's wait 30 seconds and try again" |
 | 503 Service Unavailable | "Evolink servers are temporarily busy. Let's try again in a minute" |
 

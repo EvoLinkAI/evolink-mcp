@@ -9,7 +9,7 @@ export interface RouterApiError {
 const HTTP_ERROR_MESSAGES: Record<number, string> = {
   400: 'Invalid request parameters',
   401: 'Invalid or expired API Key. Check EVOLINK_API_KEY',
-  402: 'Insufficient balance. Top up at https://evolink.ai/dashboard/billing',
+  402: 'Insufficient balance. Top up at https://evolink.ai/dashboard/credits',
   403: 'Access denied',
   404: 'Model not found or endpoint unavailable',
   429: 'Rate limit exceeded. Please retry after 30s',

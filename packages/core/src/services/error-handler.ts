@@ -13,7 +13,7 @@ export interface EvolinkApiError {
 const HTTP_ERROR_MESSAGES: Record<number, string> = {
   400: 'Invalid request parameters',
   401: 'Invalid or expired API Key. Check EVOLINK_API_KEY',
-  402: 'Insufficient balance. Top up at https://evolink.ai/dashboard/billing',
+  402: 'Insufficient balance. Top up at https://evolink.ai/dashboard/credits',
   403: 'Access denied',
   404: 'Resource not found',
   413: 'Request too large. Compress images to under 4MB',
@@ -26,7 +26,7 @@ const HTTP_ERROR_MESSAGES: Record<number, string> = {
 const BUSINESS_ERROR_MESSAGES: Record<string, string> = {
   content_policy_violation: 'Prompt triggered content safety review. Please revise your description and retry.',
   model_unavailable: 'This model is currently unavailable. Use list_models to see available models.',
-  insufficient_quota: 'Insufficient account balance. Top up at https://evolink.ai/dashboard/billing',
+  insufficient_quota: 'Insufficient account balance. Top up at https://evolink.ai/dashboard/credits',
 };
 
 export function formatApiError(status: number, body: unknown): string {
@@ -94,7 +94,7 @@ const TASK_ERROR_MAP: Record<TaskErrorCode, TaskErrorInfo> = {
     retryable: true,
   },
   quota_exceeded: {
-    suggestion: 'Account quota exceeded or rate limited. Wait a moment, then retry. Top up at https://evolink.ai/dashboard/billing',
+    suggestion: 'Account quota exceeded or rate limited. Wait a moment, then retry. Top up at https://evolink.ai/dashboard/credits',
     retryable: true,
   },
   resource_exhausted: {

@@ -152,7 +152,7 @@ All file endpoints are **synchronous**.
 |------|---------|------------|
 | 400 | Bad request | Check required fields; revise prompt |
 | 401 | Invalid API key | Verify at evolink.ai/dashboard/keys |
-| 402 | Insufficient credits | Top up at evolink.ai/dashboard/billing |
+| 402 | Insufficient credits | Top up at evolink.ai/dashboard/credits |
 | 429 | Rate limit exceeded | Wait 30–60s, retry |
 | 500 | Server error | Retry after 1 minute |
 | 503 | Service unavailable | Retry after 1–2 minutes |
@@ -167,7 +167,7 @@ All file endpoints are **synchronous**.
 | `image_processing_error` | No | Check format (JPG/PNG/WebP), size (<10MB), URL accessibility |
 | `model_unavailable` | No | Use `list_models` to find alternatives |
 | `generation_timeout` | Yes | Retry; simplify prompt if repeated |
-| `quota_exceeded` | Yes | Top up at evolink.ai/dashboard/billing |
+| `quota_exceeded` | Yes | Top up at evolink.ai/dashboard/credits |
 | `resource_exhausted` | Yes | Wait 30–60s, retry |
 | `service_error` | Yes | Retry after 1 minute |
 | `generation_failed_no_content` | Yes | Modify prompt, retry |

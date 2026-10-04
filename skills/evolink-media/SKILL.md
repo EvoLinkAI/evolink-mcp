@@ -129,7 +129,7 @@ Music has two **required** fields — always collect both before calling `genera
 | Error | What to tell the user |
 |-------|----------------------|
 | 401 Unauthorized | "API key isn't working. Check or regenerate at evolink.ai/dashboard/keys" |
-| 402 Payment Required | "Account balance is low. Add credits at evolink.ai/dashboard/billing" |
+| 402 Payment Required | "Account balance is low. Add credits at evolink.ai/dashboard/credits" |
 | 429 Rate Limited | "Too many requests — wait 30 seconds and retry" |
 | 503 Service Unavailable | "Servers are temporarily busy. Try again in a minute" |
 

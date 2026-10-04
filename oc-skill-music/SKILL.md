@@ -143,7 +143,7 @@ Music has two required fields with no defaults — always collect both before ca
 | Error | Action |
 |-------|--------|
 | 401 | "API key isn't working. Check at evolink.ai/dashboard/keys" |
-| 402 | "Balance is low. Add credits at evolink.ai/dashboard/billing" |
+| 402 | "Balance is low. Add credits at evolink.ai/dashboard/credits" |
 | 429 | "Rate limited — wait 30s and retry" |
 | 503 | "Servers busy — retry in a minute" |
 
