@@ -32,10 +32,10 @@
   ],
   "author": "EvoLink AI <support@evolink.ai>",
   "license": "Apache-2.0",
-  "homepage": "https://github.com/Evolink-AI/evolink-media-mcp",
+  "homepage": "https://github.com/EvoLinkAI/evolink-mcp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/Evolink-AI/evolink-media-mcp.git"
+    "url": "git+https://github.com/EvoLinkAI/evolink-mcp.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.12.1",
