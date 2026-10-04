@@ -24,7 +24,7 @@ EVOLINK_API_KEY=your-key node packages/evolink-media/dist/evolink-media/src/inde
 npx @modelcontextprotocol/inspector node packages/evolink-media/dist/evolink-media/src/index.js
 ```
 
-No test suite is configured.
+`npm test` builds all packages and runs `tests/safety.test.mjs` and `tests/remote.test.mjs`.
 
 ## Architecture
 
@@ -35,6 +35,7 @@ packages/
   core/              # Shared implementation (not a standalone package)
   evolink-media/     # Production MCP server (api.evolink.ai)
   evolink-media-beta/ # Beta MCP server (beta-api.evolink.ai)
+  remote/            # Hosted MCP service for https://mcp.evolink.ai/mcp (deployed, not published)
 skills/              # Claude Code plugin skill
 oc-skill/            # OpenClaw skill definition
 ```

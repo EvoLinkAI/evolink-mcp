@@ -1,4 +1,5 @@
 import { execFileSync } from 'node:child_process';
+import { currentRequestCredentials, processCredentialsAllowed } from './request-context.js';
 
 export interface ServerConfig {
   channel: 'official' | 'beta';
@@ -40,6 +41,15 @@ export function createConfig(channel: 'official' | 'beta'): ServerConfig {
 }
 
 export function getApiKey(): string {
+  const scoped = currentRequestCredentials();
+  if (scoped) {
+    if (scoped.apiKey) return scoped.apiKey;
+    throw new Error(scoped.unavailableReason ?? 'No EvoLink credential is available for this request.');
+  }
+  if (!processCredentialsAllowed()) {
+    throw new Error('No EvoLink credential is available for this request.');
+  }
+
   const configured = process.env.EVOLINK_API_KEY?.trim();
   if (configured) return configured;
 

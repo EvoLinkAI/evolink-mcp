@@ -5,12 +5,13 @@
     "packages/core",
     "packages/evolink-media",
     "packages/evolink-media-beta",
-    "packages/evolink-router"
+    "packages/evolink-router",
+    "packages/remote"
   ],
   "scripts": {
     "build": "npm run build --workspaces",
     "clean": "rm -rf packages/*/dist",
-    "test": "npm run build && node --test tests/safety.test.mjs",
+    "test": "npm run build && node --test tests/safety.test.mjs tests/remote.test.mjs",
     "check": "npm test"
   },
   "engines": {

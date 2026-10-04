@@ -1,0 +1,22 @@
+{
+  "name": "@evolinkai/mcp-remote",
+  "version": "0.1.0",
+  "private": true,
+  "description": "EvoLink hosted MCP service (Streamable HTTP) behind https://mcp.evolink.ai/mcp. Deployed, not published to npm.",
+  "type": "module",
+  "main": "dist/remote/src/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/remote/src/index.js"
+  },
+  "author": "EvoLink AI <support@evolink.ai>",
+  "license": "Apache-2.0",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.12.1",
+    "zod": "^3.24.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.13.4",
+    "typescript": "^5.7.3"
+  }
+}

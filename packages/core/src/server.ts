@@ -15,7 +15,12 @@ import { registerDiagnoseRequest } from './tools/diagnose-request.js';
 
 export { type ServerConfig, createConfig, getApiKey } from './config.js';
 
-export function createServer(config: ServerConfig): McpServer {
+export interface ServerOptions {
+  /** Allow upload_file to read local paths (stdio only); the hosted service sets false. */
+  localFileUploads?: boolean;
+}
+
+export function createServer(config: ServerConfig, options: ServerOptions = {}): McpServer {
   const server = new McpServer({
     name: config.channel === 'beta' ? 'evolink-mcp-beta' : 'evolink-mcp',
     version: '1.3.0',
@@ -27,7 +32,7 @@ export function createServer(config: ServerConfig): McpServer {
   registerListModels(server);
   registerEstimateCost(server);
   registerCheckTask(server, config);
-  registerUploadFile(server);
+  registerUploadFile(server, { localFiles: options.localFileUploads ?? true });
   registerDeleteFile(server);
   registerListFiles(server);
   registerModelHealth(server);
