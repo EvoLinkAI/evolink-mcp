@@ -19,7 +19,17 @@ Set `EVOLINK_MCP_AUTH`:
 
 Every request uses only its own credential (`AsyncLocalStorage` in `core/src/request-context.ts`). The service refuses to start when `EVOLINK_API_KEY`, `EVOLINK_CREDENTIAL_HELPER` or `EVOLINK_UPLOAD_ALLOWED_DIRS` is set, and `upload_file` accepts only `base64_data` or `file_url`.
 
-**Not wired yet:** in `oauth` mode the per-connection EvoLink key comes from a `KeyResolver`. The gateway interface for it does not exist yet, so paid tools return a clear error and send nothing upstream until it does.
+**Per-connection keys (key custody option C):** in `oauth` mode each Passport session pays with its own MCP key. The key is stored encrypted in the gateway; this service fetches it with its own service credential and keeps it only in memory (`EVOLINK_MCP_KEY_CACHE_SECONDS`, default 300, never past the key's `expires_at`). Without `EVOLINK_MCP_KEY_ENDPOINT` the free lookups still work, but paid and account tools return a clear error and send nothing upstream. The gateway side of this contract is not built yet:
+
+```
+POST <EVOLINK_MCP_KEY_ENDPOINT>            (internal network only)
+Authorization: Bearer <service token>
+{"subject": "<Passport sub>", "session_id": "<Passport sid>", "client_id": "<OAuth client_id>"}
+
+200 {"key": "sk-…", "key_id": "123", "expires_at": <unix seconds>}
+404/410 {"error": {"code": "connection_not_found" | "connection_revoked" | "session_inactive"}}  → the client is told to reconnect
+401 service token rejected; 429/5xx temporary → "retry shortly, nothing was charged"
+```
 
 ## Configuration
 
@@ -36,7 +46,10 @@ Every request uses only its own credential (`AsyncLocalStorage` in `core/src/req
 | `EVOLINK_MCP_MAX_BODY_BYTES` | `104857600` | Large files should use `file_url` |
 | `EVOLINK_MCP_ALLOWED_HOSTS` | unset | Comma-separated; other `Host` headers get 403 |
 | `EVOLINK_MCP_DOCUMENTATION_URL` | `https://evolink.ai/mcp` | |
-| `EVOLINK_BASE_URL`, `EVOLINK_CONTROL_BASE` | production gateway | Point at a staging gateway such as `https://t-api.evolink.ai` |
+| `EVOLINK_MCP_KEY_ENDPOINT` | unset | Gateway endpoint that returns a connection's MCP key (oauth mode). HTTPS, or HTTP inside a private network |
+| `EVOLINK_MCP_SERVICE_TOKEN` / `EVOLINK_MCP_SERVICE_TOKEN_FILE` | unset | This service's credential for the key endpoint (24–512 characters); set one, together with the endpoint |
+| `EVOLINK_MCP_KEY_CACHE_SECONDS` | `300` | How long a fetched key is reused (0–3600) |
+| `EVOLINK_BASE_URL`, `EVOLINK_CONTROL_BASE` | production gateway | Point at a staging gateway |
 
 ## Run
 
@@ -49,4 +62,4 @@ Logs are one JSON line per HTTP request on stdout (`event: "mcp_http"`, status, 
 
 ## Tests
 
-`npm test` runs `tests/remote.test.mjs` against a local mock Passport JWKS and a mock gateway: discovery, token rejection cases, scope, per-connection keys, API key mode with concurrent callers, rate limits, body limits, Host allowlist, key rotation and JWKS outage.
+`npm test` runs `tests/remote.test.mjs` against a local mock Passport JWKS and a mock gateway: discovery, token rejection cases, scope, per-connection keys (cache, shared lookups, revoked connections, settings), API key mode with concurrent callers, rate limits, body limits, Host allowlist, key rotation and JWKS outage.

@@ -1,12 +1,23 @@
 #!/usr/bin/env node
 import { createConfig } from '../../core/src/config.js';
 import { createPassportVerifier } from './auth.js';
-import { unconfiguredKeyResolver } from './key-resolver.js';
+import { createGatewayKeyResolver, unconfiguredKeyResolver } from './key-resolver.js';
 import { startRemoteService } from './service.js';
 import { loadSettings } from './settings.js';
 
 async function main(): Promise<void> {
   const settings = loadSettings(process.env);
+  const keyResolver = settings.keyEndpoint && settings.serviceToken
+    ? createGatewayKeyResolver({
+      endpoint: settings.keyEndpoint,
+      serviceToken: settings.serviceToken,
+      cacheTtlMs: settings.keyCacheSeconds * 1000,
+    })
+    : unconfiguredKeyResolver;
+  if (settings.auth === 'oauth' && keyResolver === unconfiguredKeyResolver) {
+    console.error('EVOLINK_MCP_KEY_ENDPOINT is not set: signed-in connections can browse models but paid and account tools are disabled.');
+  }
+
   const service = await startRemoteService({
     config: createConfig('official'),
     auth: settings.auth,
@@ -21,7 +32,7 @@ async function main(): Promise<void> {
         requiredScope: settings.requiredScope,
       })
       : undefined,
-    keyResolver: unconfiguredKeyResolver,
+    keyResolver,
     documentationUrl: settings.documentationUrl,
     rateLimitPerMinute: settings.rateLimitPerMinute,
     maxBodyBytes: settings.maxBodyBytes,

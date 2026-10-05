@@ -6,7 +6,12 @@ import { Client } from '@modelcontextprotocol/sdk/client/index.js';
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js';
 import { startRemoteService } from '../packages/remote/dist/remote/src/service.js';
 import { createPassportVerifier } from '../packages/remote/dist/remote/src/auth.js';
-import { unconfiguredKeyResolver } from '../packages/remote/dist/remote/src/key-resolver.js';
+import {
+  KeyUnavailableError,
+  checkKeyEndpoint,
+  createGatewayKeyResolver,
+  unconfiguredKeyResolver,
+} from '../packages/remote/dist/remote/src/key-resolver.js';
 import { loadSettings } from '../packages/remote/dist/remote/src/settings.js';
 import { getApiKey } from '../packages/remote/dist/core/src/config.js';
 import { runWithRequestCredentials } from '../packages/remote/dist/core/src/request-context.js';
@@ -16,6 +21,7 @@ const ISSUER = 'https://passport.test';
 const RESOURCE = 'https://mcp.test/mcp';
 const METADATA_URL = 'https://mcp.test/.well-known/oauth-protected-resource/mcp';
 const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+const SERVICE_TOKEN = 'svc-mcp-remote-test-token-0123456789';
 const USER_AGENT = 'remote-test-agent/1.0';
 
 const cleanups = [];
@@ -298,6 +304,129 @@ test('hosted settings refuse process-wide credentials and insecure URLs', () => 
   assert.deepEqual(loadSettings({ EVOLINK_MCP_ALLOWED_HOSTS: 'mcp.evolink.ai, MCP-key.evolink.ai' }).allowedHosts, ['mcp.evolink.ai', 'mcp-key.evolink.ai']);
 });
 
+test('the gateway key resolver caches per connection, shares concurrent lookups and forgets revoked connections', async () => {
+  let clock = 1_000_000;
+  const keyService = gateway.keyService;
+  keyService.mode = 'ok';
+  keyService.calls.length = 0;
+  keyService.expiresAt = undefined;
+  const resolver = createGatewayKeyResolver({
+    endpoint: `${gateway.url}/internal/mcp/connection-key`,
+    serviceToken: SERVICE_TOKEN,
+    cacheTtlMs: 60_000,
+    now: () => clock,
+  });
+  const identity = { subject: 'usr_cache', sessionId: 'sess_cache', clientId: 'https://claude.ai/oauth/mcp-oauth-client-metadata', scopes: ['mcp'], expiresAt: 0 };
+
+  assert.equal(await resolver.resolve(identity), 'sk-from-gateway-sess_cache');
+  assert.equal(await resolver.resolve(identity), 'sk-from-gateway-sess_cache');
+  assert.equal(keyService.calls.length, 1, 'cached within the TTL');
+  assert.deepEqual(keyService.calls[0], {
+    authorization: `Bearer ${SERVICE_TOKEN}`,
+    client: 'mcp-remote',
+    body: { subject: 'usr_cache', session_id: 'sess_cache', client_id: 'https://claude.ai/oauth/mcp-oauth-client-metadata' },
+  });
+
+  const concurrent = await Promise.all(Array.from({ length: 5 }, () => resolver.resolve({ ...identity, sessionId: 'sess_burst' })));
+  assert.deepEqual(new Set(concurrent), new Set(['sk-from-gateway-sess_burst']));
+  assert.equal(keyService.calls.length, 2, 'concurrent lookups for one connection share a request');
+
+  clock += 61_000;
+  await resolver.resolve(identity);
+  assert.equal(keyService.calls.length, 3, 'refetched after the TTL');
+
+  keyService.mode = 'revoked';
+  clock += 61_000;
+  await assert.rejects(resolver.resolve(identity), error => error instanceof KeyUnavailableError && /reconnect EvoLink/.test(error.message));
+  keyService.mode = 'ok';
+  await resolver.resolve(identity);
+  assert.equal(keyService.calls.length, 5, 'a revoked connection is not served from the cache');
+
+  keyService.mode = 'unauthorized';
+  await assert.rejects(resolver.resolve({ ...identity, sessionId: 'sess_unauthorized' }), error => !(error instanceof KeyUnavailableError) && /service credential/.test(error.message));
+  keyService.mode = 'garbage';
+  await assert.rejects(resolver.resolve({ ...identity, sessionId: 'sess_garbage' }), /no usable key/);
+  keyService.mode = 'ok';
+
+  const before = keyService.calls.length;
+  await assert.rejects(resolver.resolve({ ...identity, sessionId: undefined }), KeyUnavailableError);
+  assert.equal(keyService.calls.length, before, 'a token without a session never reaches the gateway');
+
+  const shortLived = createGatewayKeyResolver({ endpoint: `${gateway.url}/internal/mcp/connection-key`, serviceToken: SERVICE_TOKEN, cacheTtlMs: 600_000, now: () => clock });
+  keyService.expiresAt = Math.floor(clock / 1000) + 5;
+  await shortLived.resolve({ ...identity, sessionId: 'sess_short' });
+  clock += 6_000;
+  await shortLived.resolve({ ...identity, sessionId: 'sess_short' });
+  assert.equal(keyService.calls.length, before + 2, 'the key expiry caps the cache');
+  keyService.expiresAt = undefined;
+});
+
+test('signed-in connections pay with the key the gateway hands out (custody C)', async () => {
+  gateway.keyService.mode = 'ok';
+  const lookups = gateway.keyService.calls.length;
+  const service = await startService({
+    keyResolver: createGatewayKeyResolver({ endpoint: `${gateway.url}/internal/mcp/connection-key`, serviceToken: SERVICE_TOKEN }),
+  });
+  const client = await connect(service.url, signToken(signingKey, claims({ sid: 'sess_custody' })));
+  for (const prompt of ['first custody image', 'second custody image']) {
+    const result = await client.callTool({ name: 'generate_image', arguments: { model: IMAGE_MODEL, prompt } });
+    assert.notEqual(result.isError, true, JSON.stringify(result));
+    assert.equal(gateway.calls.find(call => call.body?.prompt === prompt).authorization, 'Bearer sk-from-gateway-sess_custody');
+  }
+  assert.equal(gateway.keyService.calls.length, lookups + 1, 'one lookup serves the connection');
+  assert.ok(!JSON.stringify(service.logs).includes('sk-from-gateway'), 'logs never contain the key');
+  assert.ok(!JSON.stringify(service.logs).includes(SERVICE_TOKEN), 'logs never contain the service token');
+  await client.close();
+});
+
+test('a revoked or disabled connection is told to reconnect and nothing is submitted', async () => {
+  const service = await startService({
+    keyResolver: createGatewayKeyResolver({ endpoint: `${gateway.url}/internal/mcp/connection-key`, serviceToken: SERVICE_TOKEN }),
+  });
+  gateway.keyService.mode = 'revoked';
+  const revokedClient = await connect(service.url, signToken(signingKey, claims({ sid: 'sess_revoked' })));
+  const before = gateway.calls.filter(call => call.path === '/v1/images/generations').length;
+  const revoked = await revokedClient.callTool({ name: 'generate_image', arguments: { model: IMAGE_MODEL, prompt: 'a cat' } });
+  assert.equal(revoked.isError, true);
+  assert.match(revoked.content[0].text, /no longer active .*reconnect EvoLink/);
+  assert.equal(gateway.calls.filter(call => call.path === '/v1/images/generations').length, before);
+  await revokedClient.close();
+
+  gateway.keyService.mode = 'ok';
+  const disabledClient = await connect(service.url, signToken(signingKey, claims({ sid: 'sess_disabled' })));
+  const disabled = await disabledClient.callTool({ name: 'generate_image', arguments: { model: IMAGE_MODEL, prompt: 'disabled-key cat' } });
+  assert.equal(disabled.isError, true);
+  assert.match(disabled.content[0].text, /key_disabled/);
+  assert.match(disabled.content[0].text, /Ask the user to reconnect EvoLink in this client/, 'hosted wording, not "check EVOLINK_API_KEY"');
+  assert.match(disabled.content[0].text, /Nothing was submitted or charged/);
+  await disabledClient.close();
+});
+
+test('key endpoint settings come in pairs, use HTTP only on private networks, and can read the token from a file', () => {
+  const endpoint = 'http://groapi:3000/internal/mcp/connection-key';
+  const configured = loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN: SERVICE_TOKEN });
+  assert.equal(configured.keyEndpoint, endpoint);
+  assert.equal(configured.serviceToken, SERVICE_TOKEN);
+  assert.equal(configured.keyCacheSeconds, 300);
+  const fromFile = loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN_FILE: '/run/secrets/mcp' }, path => (path === '/run/secrets/mcp' ? `${SERVICE_TOKEN}\n` : ''));
+  assert.equal(fromFile.serviceToken, SERVICE_TOKEN);
+  assert.equal(loadSettings({}).keyEndpoint, undefined);
+
+  assert.throws(() => loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint }), /must be set together/);
+  assert.throws(() => loadSettings({ EVOLINK_MCP_SERVICE_TOKEN: SERVICE_TOKEN }), /must be set together/);
+  assert.throws(() => loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN: 'short' }), /24–512/);
+  assert.throws(() => loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN: SERVICE_TOKEN, EVOLINK_MCP_SERVICE_TOKEN_FILE: '/x' }, () => SERVICE_TOKEN), /not both/);
+  assert.throws(() => loadSettings({ EVOLINK_MCP_AUTH: 'api-key', EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN: SERVICE_TOKEN }), /only used in oauth mode/);
+  assert.throws(() => loadSettings({ EVOLINK_MCP_KEY_ENDPOINT: endpoint, EVOLINK_MCP_SERVICE_TOKEN: SERVICE_TOKEN, EVOLINK_MCP_KEY_CACHE_SECONDS: '7200' }), /KEY_CACHE_SECONDS/);
+
+  for (const ok of ['https://api.evolink.ai/internal/mcp/connection-key', 'http://10.0.3.7:3000/k', 'http://172.20.0.2/k', 'http://192.168.1.5/k', 'http://127.0.0.1:3000/k', 'http://groapi.internal/k', 'http://groapi:3000/k']) {
+    assert.equal(checkKeyEndpoint(ok), new URL(ok).toString(), ok);
+  }
+  for (const bad of ['http://api.evolink.ai/k', 'http://8.8.8.8/k', 'ftp://groapi/k', 'https://user:pass@api.evolink.ai/k', 'not a url']) {
+    assert.throws(() => checkKeyEndpoint(bad), /EVOLINK_MCP_KEY_ENDPOINT/, bad);
+  }
+});
+
 // --- helpers ---
 
 async function startService(overrides = {}) {
@@ -390,6 +519,8 @@ async function listen(handler) {
 
 async function startGateway() {
   const calls = [];
+  /** The gateway's per-connection key endpoint (key custody option C). */
+  const keyService = { mode: 'ok', calls: [] };
   const server = await listen(async (req, res) => {
     const chunks = [];
     for await (const chunk of req) chunks.push(chunk);
@@ -399,8 +530,18 @@ async function startGateway() {
       res.writeHead(status, { 'content-type': 'application/json', ...headers });
       res.end(JSON.stringify(payload));
     };
+    if (req.method === 'POST' && req.url === '/internal/mcp/connection-key') {
+      keyService.calls.push({ authorization: req.headers.authorization, client: req.headers['x-evo-client'], body });
+      if (req.headers.authorization !== `Bearer ${SERVICE_TOKEN}` || keyService.mode === 'unauthorized') return send(401, { error: { code: 'service_unauthorized' } });
+      if (keyService.mode === 'revoked') return send(410, { error: { code: 'connection_revoked' } });
+      if (keyService.mode === 'garbage') return send(200, { key: '' });
+      return send(200, { key: `sk-from-gateway-${body.session_id}`, key_id: '42', expires_at: keyService.expiresAt ?? Math.floor(Date.now() / 1000) + 3600 });
+    }
     calls.push({ method: req.method, path: req.url, authorization: req.headers.authorization, clientName: req.headers['x-evo-client-name'], body });
     if (req.method === 'POST' && req.url === '/v1/images/generations') {
+      if ((body?.prompt ?? '').includes('disabled-key')) {
+        return send(401, { error: { code: 'KEY_DISABLED', type: 'authentication_error', message: 'API key "mcp" is disabled.' } });
+      }
       const wait = Number(/wait=(\d+)/.exec(body?.prompt ?? '')?.[1] ?? 0);
       if (wait) await delay(wait);
       return send(200, { id: `task_${calls.length}`, status: 'pending', model: body?.model, type: 'image', progress: 0, task_info: { estimated_time: 5 } }, { 'x-request-id': 'req_gateway' });
@@ -411,7 +552,7 @@ async function startGateway() {
     }
     return send(404, {});
   });
-  return { ...server, calls };
+  return { ...server, calls, keyService };
 }
 
 async function startJwks(initialKeys) {
