@@ -1,4 +1,4 @@
-import { type ServerConfig, getApiKey } from '../config.js';
+import { type ServerConfig, gatewayAuthHeaders } from '../config.js';
 import { classifyGatewayError, formatGatewayError, type GatewayErrorInfo } from './error-handler.js';
 import {
   DEFAULT_READ_TIMEOUT_MS,
@@ -159,7 +159,7 @@ export async function withRetry<T>(
 async function rawRequest<T>(config: ServerConfig, options: RequestOptions): Promise<{ data: T; requestId?: string; headers: Headers }> {
   const url = `${config.baseUrl}${options.path}`;
   const headers: Record<string, string> = {
-    'Authorization': `Bearer ${getApiKey()}`,
+    ...gatewayAuthHeaders(),
     'Accept': 'application/json',
     ...evoHeaders(options.tool ?? 'unknown'),
   };

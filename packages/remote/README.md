@@ -17,19 +17,27 @@ Set `EVOLINK_MCP_AUTH`:
 - **`oauth`** (default, `mcp.evolink.ai`): clients sign in through Passport. Requests without a token get `401` with `WWW-Authenticate: Bearer resource_metadata="…", scope="mcp"`, which is how Claude, Cursor, Codex and VS Code find the sign-in page. Tokens must be ES256 JWTs from Passport with `iss` = the authorization server, `aud` = this resource URL and the `mcp` scope. Invalid tokens get `401 invalid_token`, a missing scope gets `403 insufficient_scope`, and a Passport JWKS outage gets `503` (clients retry instead of reconnecting).
 - **`api-key`** (fallback, later `mcp-key.evolink.ai`): clients send `Authorization: Bearer <EvoLink API key>`; no OAuth metadata is published, because Cursor stops sending custom headers once it sees OAuth discovery.
 
-Every request uses only its own credential (`AsyncLocalStorage` in `core/src/request-context.ts`). The service refuses to start when `EVOLINK_API_KEY`, `EVOLINK_CREDENTIAL_HELPER` or `EVOLINK_UPLOAD_ALLOWED_DIRS` is set, and `upload_file` accepts only `base64_data` or `file_url`.
+Every request uses only its own credential (`AsyncLocalStorage` in `core/src/request-context.ts`). The service refuses to start when `EVOLINK_API_KEY`, `EVOLINK_CREDENTIAL_HELPER` or `EVOLINK_UPLOAD_ALLOWED_DIRS` is set. In `api-key` mode `upload_file` accepts only `base64_data` or `file_url`; signed-in connections do not offer it (see below).
 
-**Per-connection keys (key custody option C):** in `oauth` mode each Passport session pays with its own MCP key. The key is stored encrypted in the gateway; this service fetches it with its own service credential and keeps it only in memory (`EVOLINK_MCP_KEY_CACHE_SECONDS`, default 300, never past the key's `expires_at`). Without `EVOLINK_MCP_KEY_ENDPOINT` the free lookups still work, but paid and account tools return a clear error and send nothing upstream. The gateway side of this contract is not built yet:
+**Signed-in connections never see a key (key custody A):** in `oauth` mode this service holds no user keys. Each gateway call carries this service's credential and names the connection; the gateway checks the Passport session, finds or creates that connection's MCP key (purpose `mcp`, stored only as a hash) and bills it like any other key. Without `EVOLINK_MCP_SERVICE_TOKEN` the free lookups still work, but paid and account tools return a clear error and send nothing upstream.
 
 ```
-POST <EVOLINK_MCP_KEY_ENDPOINT>            (internal network only)
-Authorization: Bearer <service token>
-{"subject": "<Passport sub>", "session_id": "<Passport sid>", "client_id": "<OAuth client_id>"}
-
-200 {"key": "sk-…", "key_id": "123", "expires_at": <unix seconds>}
-404/410 {"error": {"code": "connection_not_found" | "connection_revoked" | "session_inactive"}}  → the client is told to reconnect
-401 service token rejected; 429/5xx temporary → "retry shortly, nothing was charged"
+Authorization: Bearer evmcp_…              this service's credential (gateway MCP_SERVICE_TOKEN; MCP_SERVICE_TOKEN_PREVIOUS while rotating)
+X-Evo-Mcp-Session: <Passport sid>          required
+X-Evo-Mcp-Subject: <Passport sub>          required
+X-Evo-Mcp-Client: <OAuth client_id>        optional; the connection is named "EvoLink MCP: <client host>"
 ```
+
+| Gateway answer | What the assistant is told |
+|---|---|
+| 401 `connection_not_found`, `connection_revoked`, `session_inactive`, `session_expired` | Reconnect the existing EvoLink connection |
+| 503 `agent_session_unavailable` | Retry in a minute; do not reconnect |
+| 500 `mcp_connection_create_failed` | Retry in a minute |
+| 401 `mcp_service_unauthorized`, 400 `mcp_connection_required` | Server-side problem; do not reconnect |
+| 403 `user_disabled` | Contact EvoLink support |
+| quota errors | Same codes as any other key (top up, or raise this connection's limit) |
+
+A token without a session (`sid`), or with a session or subject the gateway would refuse (1–80 printable characters, no spaces), is told to reconnect and nothing is sent. `upload_file` is not offered to signed-in connections: files-api accepts only the user's own API key. Pass public URLs to the generation tools instead.
 
 ## Configuration
 
@@ -46,9 +54,7 @@ Authorization: Bearer <service token>
 | `EVOLINK_MCP_MAX_BODY_BYTES` | `104857600` | Large files should use `file_url` |
 | `EVOLINK_MCP_ALLOWED_HOSTS` | unset | Comma-separated; other `Host` headers get 403 |
 | `EVOLINK_MCP_DOCUMENTATION_URL` | `https://evolink.ai/mcp` | |
-| `EVOLINK_MCP_KEY_ENDPOINT` | unset | Gateway endpoint that returns a connection's MCP key (oauth mode). HTTPS, or HTTP inside a private network |
-| `EVOLINK_MCP_SERVICE_TOKEN` / `EVOLINK_MCP_SERVICE_TOKEN_FILE` | unset | This service's credential for the key endpoint (24–512 characters); set one, together with the endpoint |
-| `EVOLINK_MCP_KEY_CACHE_SECONDS` | `300` | How long a fetched key is reused (0–3600) |
+| `EVOLINK_MCP_SERVICE_TOKEN` / `EVOLINK_MCP_SERVICE_TOKEN_FILE` | unset | This service's credential for signed-in connections (oauth mode): `evmcp_` and 32–256 letters, digits, `-` or `_`, the same value as the gateway's `MCP_SERVICE_TOKEN`. Set one; prefer the file |
 | `EVOLINK_BASE_URL`, `EVOLINK_CONTROL_BASE` | production gateway | Point at a staging gateway |
 
 ## Run
@@ -62,4 +68,4 @@ Logs are one JSON line per HTTP request on stdout (`event: "mcp_http"`, status, 
 
 ## Tests
 
-`npm test` runs `tests/remote.test.mjs` against a local mock Passport JWKS and a mock gateway: discovery, token rejection cases, scope, per-connection keys (cache, shared lookups, revoked connections, settings), API key mode with concurrent callers, rate limits, body limits, Host allowlist, key rotation and JWKS outage.
+`npm test` runs `tests/remote.test.mjs` against a local mock Passport JWKS and a mock gateway that checks the service channel the way the gateway does: discovery, token rejection cases, scope, the channel headers, every channel error and its next step, tokens without a usable session, settings, API key mode with concurrent callers, rate limits, body limits, Host allowlist, key rotation and JWKS outage.

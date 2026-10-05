@@ -25,7 +25,12 @@ export type ErrorCategory =
   | 'idempotency_conflict'
   | 'outcome_unknown'
   | 'request_too_large'
-  | 'server_error';
+  | 'server_error'
+  | 'connection_ended'
+  | 'session_check_unavailable'
+  | 'connection_setup_failed'
+  | 'service_misconfigured'
+  | 'account_disabled';
 
 export interface GatewayErrorInfo {
   status: number;
@@ -49,6 +54,10 @@ const KEY_QUOTA_CODES = new Set(['insufficient_token_quota', 'key_quota_exhauste
 const KEY_DAILY_CODES = new Set(['token_daily_quota_exceeded', 'key_daily_quota_exhausted']);
 const CONTENT_CODES = new Set(['content_policy_violation', 'content_filter', 'sensitive_content', 'moderation_blocked', 'input_moderation_failed']);
 const UNAVAILABLE_CODES = new Set(['no_available_channel', 'model_unavailable', 'channel_selection_failed', 'service_unavailable']);
+/** Hosted service channel (key custody A): the connection itself is gone and needs a new sign-in. */
+const CONNECTION_ENDED_CODES = new Set(['connection_not_found', 'connection_revoked', 'session_inactive', 'session_expired']);
+/** The hosted service, not the user's connection, was refused or sent an incomplete request. */
+const SERVICE_CODES = new Set(['mcp_service_unauthorized', 'mcp_connection_required']);
 
 const DETAIL_FIELDS = [
   'key_name',
@@ -101,6 +110,11 @@ function categorize(status: number, code: string): ErrorCategory {
   if (lower === 'paid_outcome_unknown') return 'outcome_unknown';
   if (CONTENT_CODES.has(lower)) return 'content_policy';
   if (UNAVAILABLE_CODES.has(lower) || lower.startsWith('channel:')) return 'model_unavailable';
+  if (CONNECTION_ENDED_CODES.has(lower)) return 'connection_ended';
+  if (lower === 'agent_session_unavailable') return 'session_check_unavailable';
+  if (lower === 'mcp_connection_create_failed') return 'connection_setup_failed';
+  if (SERVICE_CODES.has(lower)) return 'service_misconfigured';
+  if (lower === 'user_disabled') return 'account_disabled';
   switch (status) {
     case 401: return 'unauthorized';
     case 402: return 'account_balance_insufficient';
@@ -120,6 +134,8 @@ const RETRYABLE: ReadonlySet<ErrorCategory> = new Set<ErrorCategory>([
   'model_unavailable',
   'outcome_unknown',
   'server_error',
+  'session_check_unavailable',
+  'connection_setup_failed',
 ]);
 
 function credits(value: unknown): string | undefined {
@@ -190,9 +206,19 @@ function nextStep(category: ErrorCategory, info: GatewayErrorInfo): string {
     case 'outcome_unknown':
       return 'The earlier submission with this client_request_id is still being processed or its outcome is unknown. Do not submit it again with a new id: wait a minute and retry with the same client_request_id, or look it up with list_tasks.';
     case 'request_too_large':
-      return 'The request is too large. Upload big files with upload_file and pass the returned link instead.';
+      return 'The request is too large. Pass big files as links (a public URL, or one from upload_file where it is available) instead of inline data.';
     case 'server_error':
       return 'EvoLink had a temporary error. Retry in a minute; for paid generations check list_tasks first so the task is not submitted twice.';
+    case 'connection_ended':
+      return 'This EvoLink connection is no longer active (it was revoked, expired, or signed out). Ask the user to reconnect the existing EvoLink connection in this client instead of adding a new one.';
+    case 'session_check_unavailable':
+      return 'EvoLink sign-in verification is temporarily unavailable. Retry in a minute; do not reconnect.';
+    case 'connection_setup_failed':
+      return 'EvoLink could not set up this connection yet. Retry in a minute.';
+    case 'service_misconfigured':
+      return 'The EvoLink MCP service could not authenticate this request. This is a server-side problem, not the user\'s connection: do not reconnect, and try again later.';
+    case 'account_disabled':
+      return 'This EvoLink account is disabled. Ask the user to contact EvoLink support.';
   }
 }
 

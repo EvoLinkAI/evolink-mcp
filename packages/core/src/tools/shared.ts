@@ -58,7 +58,8 @@ function infoFor(error: unknown): GatewayErrorInfo {
     return { status: 0, category: 'server_error', message: 'EvoLink did not respond in time.', next_step: 'Retry in a minute.', retryable: true };
   }
   const message = error instanceof Error ? error.message : 'Unknown error';
-  // Credential problems surface as plain errors from getApiKey() or the hosted key lookup.
+  // Credential problems surface as plain errors from getApiKey(): no key in this scope, or a
+  // signed-in connection that cannot use the hosted service channel.
   return {
     status: 0,
     category: 'unauthorized',

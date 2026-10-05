@@ -16,6 +16,11 @@ export { type ServerConfig, createConfig, getApiKey } from './config.js';
 export interface ServerOptions {
   /** Allow upload_file to read local paths (stdio only); the hosted service sets false. */
   localFileUploads?: boolean;
+  /**
+   * Offer upload_file at all. Signed-in hosted connections set false: files-api
+   * accepts only the user's own API key, which key custody A never hands out.
+   */
+  uploads?: boolean;
   /** Remember the client's name from initialize for X-Evo-Client-Name (stdio only; hosted requests carry their own). */
   trackClientName?: boolean;
 }
@@ -50,7 +55,7 @@ export function createServer(config: ServerConfig, options: ServerOptions = {}):
   registerGenerateTools(server, config);
   registerGetTask(server, config);
   registerListTasks(server, config);
-  registerUploadFile(server, { localFiles: options.localFileUploads ?? true });
+  if (options.uploads ?? true) registerUploadFile(server, { localFiles: options.localFileUploads ?? true });
   registerCheckBalance(server, config);
 
   return server;

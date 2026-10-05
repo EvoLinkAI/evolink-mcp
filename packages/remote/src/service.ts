@@ -8,6 +8,7 @@ import {
   disableProcessCredentials,
   runWithRequestCredentials,
   type RequestCredentials,
+  type ServiceChannelCredentials,
 } from '../../core/src/request-context.js';
 import {
   TokenRejectedError,
@@ -15,7 +16,6 @@ import {
   type ConnectionIdentity,
   type TokenVerifier,
 } from './auth.js';
-import { KeyUnavailableError, type KeyResolver } from './key-resolver.js';
 import { FixedWindowLimiter } from './rate-limit.js';
 
 export type AuthMode = 'oauth' | 'api-key';
@@ -30,7 +30,12 @@ export interface RemoteServiceOptions {
   /** Passport base URL advertised in the protected resource metadata (oauth). */
   authorizationServer?: string;
   verifier?: TokenVerifier;
-  keyResolver?: KeyResolver;
+  /**
+   * The MCP service credential (evmcp_…) for signed-in connections, key custody A:
+   * each call carries it with the connection's Passport session and the gateway
+   * bills that connection's key. Unset keeps paid and account tools disabled.
+   */
+  serviceToken?: string;
   /** Scope a token needs for this server (oauth); default `mcp`. */
   requiredScope?: string;
   documentationUrl?: string;
@@ -56,7 +61,15 @@ const SCOPE_MISSING =
 const API_KEY_REQUIRED =
   'Send an EvoLink API key as "Authorization: Bearer <key>". Create one at https://evolink.ai/dashboard/keys.';
 const NO_KEY_NEEDED = 'This request does not carry an EvoLink account key.';
-const KEY_LOOKUP_FAILED = 'The EvoLink account key for this connection could not be loaded. Retry shortly; nothing was charged.';
+const CHANNEL_DISABLED =
+  'EvoLink account access for MCP connections is not enabled on this server yet. No request was sent and nothing was charged.';
+const RECONNECT_SESSION =
+  'This EvoLink connection is no longer valid. Ask the user to reconnect the existing EvoLink connection in this client. Nothing was charged.';
+const UPLOAD_UNAVAILABLE =
+  'Uploading files is not available on signed-in EvoLink connections yet. Pass a public URL to the generation tool instead.';
+
+/** Session and subject as the gateway accepts them: 1–80 printable ASCII characters, no spaces. */
+const CONNECTION_IDENTIFIER = /^[\x21-\x7e]{1,80}$/;
 
 const DEFAULT_MAX_BODY_BYTES = 100 * 1024 * 1024;
 
@@ -150,21 +163,22 @@ export function createRemoteHandler(options: RemoteServiceOptions): (req: Incomi
     }
   }
 
-  async function credentialsFor(
+  function credentialsFor(
     principal: Principal,
-    needsKey: boolean,
+    callsTools: boolean,
     clientName: string | undefined,
     event: Record<string, unknown>,
-  ): Promise<RequestCredentials> {
+  ): RequestCredentials {
     if (principal.kind === 'api-key') return { apiKey: principal.apiKey, clientName };
-    if (!needsKey) return { unavailableReason: NO_KEY_NEEDED, clientName };
-    if (!options.keyResolver) return { unavailableReason: KEY_LOOKUP_FAILED, clientName };
-    try {
-      return { apiKey: await options.keyResolver.resolve(principal.identity), clientName };
-    } catch (error) {
-      event.key_error = error instanceof Error ? error.message : 'unknown';
-      return { unavailableReason: error instanceof KeyUnavailableError ? error.message : KEY_LOOKUP_FAILED, clientName };
+    if (!callsTools) return { unavailableReason: NO_KEY_NEEDED, clientName };
+    if (!options.serviceToken) return { unavailableReason: CHANNEL_DISABLED, clientName };
+    const serviceChannel = serviceChannelFor(principal.identity, options.serviceToken);
+    if (!serviceChannel) {
+      event.channel_error = 'connection_identifiers';
+      return { unavailableReason: RECONNECT_SESSION, clientName };
     }
+    // files-api only takes the user's own key, which this service never has.
+    return { serviceChannel, unavailableReason: UPLOAD_UNAVAILABLE, clientName };
   }
 
   async function handleMcp(req: IncomingMessage, res: ServerResponse, event: Record<string, unknown>): Promise<void> {
@@ -210,10 +224,14 @@ export function createRemoteHandler(options: RemoteServiceOptions): (req: Incomi
     event.rpc = calls.methods;
     if (calls.tools.length > 0) event.tools = calls.tools;
     const clientName = req.headers['user-agent']?.slice(0, 200);
-    const credentials = await credentialsFor(principal, calls.tools.length > 0, clientName, event);
+    const credentials = credentialsFor(principal, calls.tools.length > 0, clientName, event);
 
     // Stateless: a fresh server and transport per request, closed with the response.
-    const server = createMcpServer(options.config, { localFileUploads: false, trackClientName: false });
+    const server = createMcpServer(options.config, {
+      localFileUploads: false,
+      trackClientName: false,
+      uploads: principal.kind === 'api-key',
+    });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();
@@ -315,6 +333,14 @@ export async function startRemoteService(
       server.closeIdleConnections();
     }),
   };
+}
+
+/** Channel credentials for one signed-in connection, or undefined when its identifiers would be refused. */
+function serviceChannelFor(identity: ConnectionIdentity, serviceToken: string): ServiceChannelCredentials | undefined {
+  const { sessionId, subject } = identity;
+  if (!sessionId || !CONNECTION_IDENTIFIER.test(sessionId) || !CONNECTION_IDENTIFIER.test(subject)) return undefined;
+  const clientId = (identity.clientId ?? '').replace(/[^\x20-\x7e]/g, '').trim().slice(0, 512) || undefined;
+  return { serviceToken, sessionId, subject, clientId };
 }
 
 function bearerToken(header: string | undefined): string | undefined {

@@ -1,5 +1,4 @@
 import { readFileSync } from 'node:fs';
-import { checkKeyEndpoint } from './key-resolver.js';
 import type { AuthMode } from './service.js';
 
 export interface RemoteSettings {
@@ -15,20 +14,28 @@ export interface RemoteSettings {
   rateLimitPerMinute: number;
   maxBodyBytes: number;
   allowedHosts?: string[];
-  /** Gateway endpoint that hands out per-connection MCP keys (oauth mode); unset keeps paid tools disabled. */
-  keyEndpoint?: string;
-  /** This service's credential for the key endpoint. */
+  /** MCP service credential for signed-in connections (oauth mode); unset keeps paid tools disabled. */
   serviceToken?: string;
-  keyCacheSeconds: number;
 }
 
 /** Process-wide credentials would bill every connection to one account, and a local upload allowlist would expose this server's disk. */
 const FORBIDDEN = ['EVOLINK_API_KEY', 'EVOLINK_CREDENTIAL_HELPER', 'EVOLINK_UPLOAD_ALLOWED_DIRS'];
 
+/** Key custody C settings: the service no longer fetches keys, so a leftover value would silently do nothing. */
+const REMOVED = ['EVOLINK_MCP_KEY_ENDPOINT', 'EVOLINK_MCP_KEY_CACHE_SECONDS'];
+
+/** The form the gateway accepts (MCP_SERVICE_TOKEN): evmcp_ followed by 32–256 letters, digits, "-" or "_". */
+const SERVICE_TOKEN = /^evmcp_[A-Za-z0-9_-]{32,256}$/;
+
 export function loadSettings(env: NodeJS.ProcessEnv, readFile: (path: string) => string = path => readFileSync(path, 'utf8')): RemoteSettings {
   for (const name of FORBIDDEN) {
     if (env[name]?.trim()) {
       throw new Error(`${name} must not be set for the hosted MCP service: every request uses its own credential.`);
+    }
+  }
+  for (const name of REMOVED) {
+    if (env[name]?.trim()) {
+      throw new Error(`${name} was removed: the gateway now finds each connection's key itself. Unset it and set EVOLINK_MCP_SERVICE_TOKEN.`);
     }
   }
 
@@ -52,20 +59,16 @@ export function loadSettings(env: NodeJS.ProcessEnv, readFile: (path: string) =>
     .map(host => host.trim().toLowerCase())
     .filter(Boolean);
 
-  const keyEndpoint = env.EVOLINK_MCP_KEY_ENDPOINT?.trim() ? checkKeyEndpoint(env.EVOLINK_MCP_KEY_ENDPOINT) : undefined;
   const tokenFile = env.EVOLINK_MCP_SERVICE_TOKEN_FILE?.trim();
-  const serviceToken = (tokenFile ? readFile(tokenFile) : env.EVOLINK_MCP_SERVICE_TOKEN ?? '').trim() || undefined;
   if (env.EVOLINK_MCP_SERVICE_TOKEN?.trim() && tokenFile) {
     throw new Error('Set EVOLINK_MCP_SERVICE_TOKEN or EVOLINK_MCP_SERVICE_TOKEN_FILE, not both');
   }
-  if (!!keyEndpoint !== !!serviceToken) {
-    throw new Error('EVOLINK_MCP_KEY_ENDPOINT and the service token (EVOLINK_MCP_SERVICE_TOKEN or _FILE) must be set together');
+  const serviceToken = (tokenFile ? readFile(tokenFile) : env.EVOLINK_MCP_SERVICE_TOKEN ?? '').trim() || undefined;
+  if (serviceToken && !SERVICE_TOKEN.test(serviceToken)) {
+    throw new Error('The MCP service token must be "evmcp_" followed by 32–256 letters, digits, "-" or "_" (the form the gateway accepts)');
   }
-  if (serviceToken && !/^[\x21-\x7e]{24,512}$/.test(serviceToken)) {
-    throw new Error('The MCP service token must be 24–512 printable characters');
-  }
-  if (keyEndpoint && auth !== 'oauth') {
-    throw new Error('EVOLINK_MCP_KEY_ENDPOINT is only used in oauth mode');
+  if (serviceToken && auth !== 'oauth') {
+    throw new Error('The MCP service token is only used in oauth mode');
   }
 
   return {
@@ -81,9 +84,7 @@ export function loadSettings(env: NodeJS.ProcessEnv, readFile: (path: string) =>
     rateLimitPerMinute: integer(env.EVOLINK_MCP_RATE_LIMIT_PER_MINUTE, 120, 0, 100_000, 'EVOLINK_MCP_RATE_LIMIT_PER_MINUTE'),
     maxBodyBytes: integer(env.EVOLINK_MCP_MAX_BODY_BYTES, 100 * 1024 * 1024, 1024, 512 * 1024 * 1024, 'EVOLINK_MCP_MAX_BODY_BYTES'),
     allowedHosts: allowedHosts.length > 0 ? allowedHosts : undefined,
-    keyEndpoint,
     serviceToken,
-    keyCacheSeconds: integer(env.EVOLINK_MCP_KEY_CACHE_SECONDS, 300, 0, 3_600, 'EVOLINK_MCP_KEY_CACHE_SECONDS'),
   };
 }
 

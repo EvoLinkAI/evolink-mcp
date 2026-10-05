@@ -9,12 +9,30 @@ import { AsyncLocalStorage } from 'node:async_hooks';
  * process-wide credentials.
  */
 export interface RequestCredentials {
-  /** Gateway API key for this request; absent when it could not be resolved. */
+  /** Caller's own API key (hosted api-key mode); absent for signed-in connections. */
   apiKey?: string;
-  /** Agent-readable reason surfaced by tools when apiKey is absent. */
+  /** Signed-in connections (key custody A): the gateway finds the connection's key itself. */
+  serviceChannel?: ServiceChannelCredentials;
+  /** Agent-readable reason surfaced by tools that need an API key when there is none. */
   unavailableReason?: string;
   /** Assistant name sent as X-Evo-Client-Name; the hosted service takes it from the HTTP User-Agent. */
   clientName?: string;
+}
+
+/**
+ * Key custody A: this service never holds a user's key. It authenticates to
+ * the gateway with its own credential and names the connection; the gateway
+ * looks up that connection's key, checks the Passport session and bills it.
+ */
+export interface ServiceChannelCredentials {
+  /** The MCP service credential (evmcp_…), the same for every connection. */
+  serviceToken: string;
+  /** Passport session ID (sid) of this connection. */
+  sessionId: string;
+  /** Passport subject (sub), i.e. the EvoLink account. */
+  subject: string;
+  /** OAuth client of the connection; the gateway names the connection after it. */
+  clientId?: string;
 }
 
 const storage = new AsyncLocalStorage<RequestCredentials>();

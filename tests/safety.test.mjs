@@ -260,6 +260,16 @@ test('gateway errors are classified by code first, with absolute console links a
     [429, 'rate_limit_exceeded', 'rate_limited', undefined],
     [500, 'internal_error', 'server_error', undefined],
     [503, undefined, 'model_unavailable', undefined],
+    // Hosted service channel (key custody A).
+    [401, 'connection_not_found', 'connection_ended', undefined],
+    [401, 'connection_revoked', 'connection_ended', undefined],
+    [401, 'session_inactive', 'connection_ended', undefined],
+    [401, 'session_expired', 'connection_ended', undefined],
+    [503, 'agent_session_unavailable', 'session_check_unavailable', undefined],
+    [500, 'mcp_connection_create_failed', 'connection_setup_failed', undefined],
+    [401, 'mcp_service_unauthorized', 'service_misconfigured', undefined],
+    [400, 'mcp_connection_required', 'service_misconfigured', undefined],
+    [403, 'user_disabled', 'account_disabled', undefined],
   ];
   for (const [status, code, category, actionUrl] of cases) {
     const info = classifyGatewayError(status, { error: { code, message: `m (request id: req_1)` } }, 5_000, 'req_header');
@@ -286,6 +296,14 @@ test('gateway errors are classified by code first, with absolute console links a
   assert.equal(classifyGatewayError(429, {}, 12_000).retry_after_seconds, 12);
   assert.match(classifyGatewayError(401, { error: { code: 'KEY_DISABLED' } }).next_step, /API key is disabled/);
 
+  // Channel answers: retry the temporary ones, never loop on a connection that is gone or a misconfigured server.
+  assert.equal(classifyGatewayError(503, { error: { code: 'agent_session_unavailable' } }).retryable, true);
+  assert.equal(classifyGatewayError(500, { error: { code: 'mcp_connection_create_failed' } }).retryable, true);
+  assert.equal(classifyGatewayError(401, { error: { code: 'connection_revoked' } }).retryable, false);
+  assert.equal(classifyGatewayError(401, { error: { code: 'mcp_service_unauthorized' } }).retryable, false);
+  assert.match(classifyGatewayError(503, { error: { code: 'agent_session_unavailable' } }).next_step, /do not reconnect/);
+  assert.match(classifyGatewayError(401, { error: { code: 'session_inactive' } }).next_step, /reconnect the existing EvoLink connection/);
+
   const files = classifyGatewayError(400, { success: false, code: 400, msg: 'file too large' });
   assert.equal(files.message, 'file too large');
   const oauth = classifyGatewayError(401, { error: 'invalid_token', error_description: 'expired' });
@@ -299,8 +317,12 @@ test('error classification never throws and always gives a next step (seeded fuz
     'account_balance_insufficient', 'key_quota_exhausted', 'key_daily_quota_exhausted', 'key_disabled', 'key_expired',
     'model_not_allowed', 'unauthorized', 'forbidden', 'rate_limited', 'invalid_request', 'not_found', 'content_policy',
     'model_unavailable', 'idempotency_conflict', 'outcome_unknown', 'request_too_large', 'server_error',
+    'connection_ended', 'session_check_unavailable', 'connection_setup_failed', 'service_misconfigured', 'account_disabled',
   ]);
-  const codes = [undefined, '', 'insufficient_quota', 'KEY_EXPIRED', 'channel:no_available_key', 'paid_outcome_unknown', 'x'.repeat(300), 42, null, {}];
+  const codes = [
+    undefined, '', 'insufficient_quota', 'KEY_EXPIRED', 'channel:no_available_key', 'paid_outcome_unknown',
+    'session_inactive', 'agent_session_unavailable', 'mcp_service_unauthorized', 'user_disabled', 'x'.repeat(300), 42, null, {},
+  ];
   const bodies = [
     () => ({ error: { code: codes[Math.floor(random() * codes.length)], message: 'x'.repeat(Math.floor(random() * 2000)), account_balance_credits: random() > 0.5 ? random() * 100 : 'n/a' } }),
     () => ({ success: false, code: Math.floor(random() * 600), msg: 'files' }),

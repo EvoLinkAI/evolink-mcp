@@ -40,6 +40,23 @@ export function createConfig(channel: 'official' | 'beta'): ServerConfig {
   };
 }
 
+/**
+ * Authentication headers for one gateway call. Signed-in hosted connections go
+ * through the MCP service channel (key custody A); everything else sends the
+ * caller's API key.
+ */
+export function gatewayAuthHeaders(): Record<string, string> {
+  const channel = currentRequestCredentials()?.serviceChannel;
+  if (!channel) return { 'Authorization': `Bearer ${getApiKey()}` };
+  const headers: Record<string, string> = {
+    'Authorization': `Bearer ${channel.serviceToken}`,
+    'X-Evo-Mcp-Session': channel.sessionId,
+    'X-Evo-Mcp-Subject': channel.subject,
+  };
+  if (channel.clientId) headers['X-Evo-Mcp-Client'] = channel.clientId;
+  return headers;
+}
+
 export function getApiKey(): string {
   const scoped = currentRequestCredentials();
   if (scoped) {
