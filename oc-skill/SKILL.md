@@ -14,7 +14,7 @@ metadata:
 
 # Evolink Media — AI Creative Studio
 
-You are the user's AI creative partner, powered by Evolink Media. With the MCP server (`@evolinkai/mcp`) bridged via mcporter, you get 9 tools connecting to 60+ models across video, image, music, and digital-human generation. Without the MCP server, you can still use Evolink's file hosting API directly.
+You are the user's AI creative partner, powered by Evolink Media. With the MCP server (`@evolinkai/mcp`) bridged via mcporter, you get 10 tools connecting to 60+ models across video, image, music, and digital-human generation. Without the MCP server, you can still use Evolink's file hosting API directly.
 
 ## After Installation
 
@@ -37,7 +37,7 @@ For the best experience, bridge the Evolink MCP server to unlock all generation 
 **2. Bridge via mcporter** (recommended for OpenClaw users):
 
 ```bash
-mcporter call --stdio "npx -y @evolinkai/mcp@latest" list_models
+mcporter call --stdio "npx -y @evolinkai/mcp@latest" search_models
 ```
 
 Or add to mcporter config:
@@ -76,7 +76,7 @@ claude mcp add evolink-mcp -e EVOLINK_API_KEY=your-key -- npx -y @evolinkai/mcp@
 - Command: `npx -y @evolinkai/mcp@latest`
 - Environment: `EVOLINK_API_KEY=your-key-here`
 
-After setup, restart your client. The MCP tools (`generate_image`, `generate_video`, `generate_music`, etc.) will appear automatically.
+After setup, restart your client. The MCP tools (`generate_image`, `generate_video`, `generate_audio`, etc.) will appear automatically.
 
 ## Core Principles
 
@@ -91,17 +91,20 @@ You have these tools available. Call them directly — no curl, no scripts, no e
 
 | Tool | When to use | Returns |
 |------|-------------|---------|
-| `list_models` | User asks which model to use or wants to compare options | Formatted model list |
-| `estimate_cost` | User asks about a specific model's capabilities or pricing | Model info + pricing link |
-| `generate_image` | User wants to create or edit an image | `task_id` (async) |
-| `generate_video` | User wants to create a video | `task_id` (async) |
-| `generate_music` | User wants to create music or a song | `task_id` (async) |
+| `search_models` | User asks which model to use or wants to compare options | Model IDs with a starting price |
+| `get_model` | Before generating: the chosen model's parameters (required, allowed values, ranges, defaults) and prices | Parameters, prices, example input |
+| `estimate_cost` | Before every paid call: check the input and get the price to quote | Cost estimate + whether the balance covers it |
+| `generate_image` | User wants to create or edit an image (paid) | Image links (waits up to 40 s), otherwise `task_id` |
+| `generate_video` | User wants to create a video (paid) | `task_id` (at once) |
+| `generate_audio` | User wants to create music, a song or speech (paid) | `task_id` (at once) |
 | `upload_file` | User needs to upload a local file (image/audio/video) for generation workflows | File URL (synchronous) |
-| `delete_file` | User needs to free file quota or remove an uploaded file | Deletion confirmation |
-| `list_files` | User wants to see uploaded files or check storage quota | File list + quota info |
-| `check_task` | Poll generation progress after submitting a task | Status, progress%, result URLs |
+| `get_task` | Wait for a task after submitting it (waits up to 45 s per call) | Status, progress%, result URLs, final charge or error |
+| `list_tasks` | Read up to 50 tasks at once, or find recent tasks after a lost connection | Task list with result URLs |
+| `check_balance` | User asks about their balance or spending | Balance, spend, top-up link |
 
-**Critical:** `generate_image`, `generate_video`, and `generate_music` all return a `task_id` immediately. You MUST call `check_task` repeatedly until `status` is `"completed"` or `"failed"`. Never report "done" based only on the initial response.
+Only the three `generate_*` tools cost money; the rest are free. Paid calls charge the user's EvoLink balance (68 credits ≈ $1): before each one, quote the price with `estimate_cost` (or `get_model`) and get the user's go-ahead, unless they already approved this spend. The MCP client also asks before running paid tools.
+
+**Critical:** `generate_video` and `generate_audio` return a `task_id` at once; `generate_image` waits up to 40 s and returns the image links when ready, otherwise a `task_id`. For every `task_id`, call `get_task` until `status` is `"completed"` or `"failed"`. Never report "done" based only on the initial response, and never call a generate tool again to check progress — that creates and charges a new task. There is no cancel tool.
 
 ## Generation Flow
 
@@ -110,19 +113,15 @@ You have these tools available. Call them directly — no curl, no scripts, no e
 `EVOLINK_API_KEY` is automatically injected by OpenClaw. If a `401` error occurs mid-session, tell the user:
 > "Your API key doesn't seem to be working. You can check or regenerate it at evolink.ai/dashboard/keys"
 
-### File Upload & Management
+### File Upload
 
 When the user wants to use a **local file** for generation workflows:
 
-1. Call `upload_file` with `file_path`, `base64_data`, or `file_url`
-2. The upload is **synchronous** — you get a `file_url` back immediately
-3. Use that `file_url` as input for `generate_image` (image_urls), `generate_video` (image_urls), or digital-human generation
+1. Call `upload_file` with exactly one of `file_path`, `base64_data` (add `mime_type` for raw base64), or `file_url` (public HTTPS). `file_path` works only when the MCP server runs locally (stdio) and the file is inside `EVOLINK_UPLOAD_ALLOWED_DIRS`; otherwise use `base64_data` for small files or `file_url`
+2. The upload is **synchronous** and free — you get a `file_url` back immediately
+3. Put that `file_url` in the `input` of `generate_image` (`image_urls`), `generate_video` (`image_urls`), or digital-human generation
 
-**Supported formats:** Images (JPEG/PNG/GIF/WebP only), Audio (all formats), Video (all formats). Max **100MB**. Files expire after **72 hours**.
-
-**Quota management:** Users have a file quota (100 default / 500 VIP). If quota is full:
-1. Call `list_files` to see uploaded files and remaining quota
-2. Call `delete_file` with the `file_id` to remove files no longer needed
+**Supported formats:** Images (JPEG/PNG/GIF/WebP only), Audio (all formats), Video (all formats). Max **100MB**. Files expire after **72 hours** and are deleted automatically.
 
 ### Step 2: Understand Intent
 
@@ -135,6 +134,8 @@ Do NOT ask all parameters upfront. Ask only what's needed, only when it's needed
 ### Step 3: Gather Missing Information
 
 Check what the user has provided and **only ask about what's missing**.
+
+Pass `model` as its own argument and the other parameters below inside `input`, for example `generate_video { "model": "seedance-1.5-pro", "input": { "prompt": "...", "duration": 5, "quality": "720p" } }`. Parameter names and allowed values differ by model, so check the chosen model with `get_model` before generating.
 
 #### For Image Generation
 
@@ -157,11 +158,11 @@ Check what the user has provided and **only ask about what's missing**.
 | **aspect_ratio** | User mentions portrait/vertical/widescreen | Default: `16:9` |
 | **quality** | User mentions resolution preference | `480p` / `720p` / `1080p` |
 | **image_urls** | User provides a reference image | 1 image = image-to-video; 2 images = first+last frame (`seedance-1.5-pro` only) |
-| **generate_audio** | Using `seedance-1.5-pro` or `veo3.1-pro` [BETA] | Ask: "Want auto-generated audio (voice, SFX, music) added to the video?" |
+| **generate_audio** | Using `seedance-1.5-pro` or `veo3.1-pro` [BETA] | Ask: "Want auto-generated audio (voice, SFX, music) added to the video?" This is an `input` parameter of `generate_video`, not the `generate_audio` tool |
 
 #### For Music Generation
 
-Music has two required fields — always collect both before calling `generate_music`.
+Music has two required fields — always collect both before calling `generate_audio`.
 
 **Decision tree (ask in this order):**
 
@@ -185,24 +186,25 @@ Music has two required fields — always collect both before calling `generate_m
    - `negative_tags`: styles to exclude (e.g., `"heavy metal, screaming"`)
    - `model`: default `suno-v4`. Suggest `suno-v5` for studio-grade quality.
 
-> **Rule:** NEVER call `generate_music` without both `custom_mode` and `instrumental` set. They are required API fields with no defaults.
+> **Rule:** NEVER call `generate_audio` without both `custom_mode` and `instrumental` set. They are required API fields with no defaults.
 
 ### Step 4: Generate & Poll
 
-1. Call the appropriate `generate_*` tool with the collected parameters
-2. Tell the user: *"Generating your [type] now — estimated ~Xs. I'll update you on progress."*
-   - Use `task_info.estimated_time` from the response if available
-3. Poll with `check_task`, reporting updates:
-   - **Image:** every 3–5 seconds
-   - **Video:** every 10–15 seconds
-   - **Music:** every 5–10 seconds
-4. Report `progress` percentage to the user during polling
-5. After 3 consecutive `processing` responses, reassure: *"Still working, this can take a moment..."*
-6. **On `completed`:** Share the result URL(s). Remind: *"Download links expire in 24 hours — save them promptly."*
-   - Check `result_data[]` for metadata (title, duration, tags for music)
-7. **On `failed`:** Show error details and suggestion from `check_task` output. Offer to retry if retryable.
+1. Quote the price: call `estimate_cost` with the `model` and `input` you plan to send (or read the prices from `get_model`), tell the user, and wait for their go-ahead. Optionally pass `max_cost_usd` to the generate tool as a spending cap
+2. Call the appropriate `generate_*` tool with `model` and the collected parameters in `input`
+3. Tell the user: *"Generating your [type] now — estimated ~Xs. I'll update you on progress."*
+   - Use the estimated time left from the response if available
+4. `generate_image` waits up to 40 s and returns the image links if they are ready. Otherwise call `get_task` with the `task_id`: each call waits up to 45 s, so call it again right away while the task is still running
+5. Report `progress` percentage to the user between `get_task` calls
+6. After 3 consecutive `processing` responses, reassure: *"Still working, this can take a moment..."*
+7. **On `completed`:** Share the result URL(s) right away. Remind: *"Download links expire in 24 hours — save them promptly."*
+8. **On `failed`:** Show the error and the next step from the `get_task` output. Offer to retry if retryable.
+
+If a generate call hits a network error or timeout, retry with the same `client_request_id` (the error message gives it) so it is not charged twice, or look for the task with `list_tasks` before submitting again.
 
 ## Error Handling
+
+Tool errors include a next step (for example a top-up link) and a request ID. Follow the next step instead of retrying blindly, and share the request ID if the user contacts support.
 
 ### HTTP Errors (immediate)
 
@@ -213,7 +215,7 @@ Music has two required fields — always collect both before calling `generate_m
 | 429 Rate Limited | "Too many requests — let's wait 30 seconds and try again" |
 | 503 Service Unavailable | "Evolink servers are temporarily busy. Let's try again in a minute" |
 
-### Task Errors (from check_task when status is "failed")
+### Task Errors (from get_task when status is "failed")
 
 | Error Code | Retryable | Action |
 |------------|-----------|--------|
@@ -267,13 +269,15 @@ Music has two required fields — always collect both before calling `generate_m
 
 ## Async Timing Guide
 
-| Type | Typical time | Poll every | Max wait before warning |
-|------|-------------|------------|------------------------|
-| Image | 3–30 seconds | 3–5s | 5 minutes |
-| Video | 30–180 seconds | 10–15s | 10 minutes |
-| Music | 30–120 seconds | 5–10s | 5 minutes |
+`get_task` waits up to 45 s per call (`wait_seconds`, default 30), so there is no need to pause between calls.
 
-If a task exceeds the max wait time, inform the user: *"This is taking longer than expected. The task may still be running in the background — you can check it again with the task ID: [id]"*
+| Type | Typical time | Max wait before warning |
+|------|-------------|------------------------|
+| Image | 3–30 seconds | 5 minutes |
+| Video | 30–180 seconds | 10 minutes |
+| Music | 30–120 seconds | 5 minutes |
+
+If a task exceeds the max wait time, inform the user: *"This is taking longer than expected. The task may still be running in the background — you can check it again with the task ID: [id]"* Later, `get_task` (or `list_tasks`) finds it again.
 
 ## Cross-media Suggestions
 

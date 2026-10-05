@@ -4,13 +4,31 @@ Complete API parameter reference for image generation tools.
 
 **Base URL:** `https://api.evolink.ai`
 **Auth:** `Authorization: Bearer {EVOLINK_API_KEY}`
-**All generation endpoints are async** — they return `task_id` immediately; poll with `check_task`.
+**All generation endpoints are async** — they return `task_id` immediately; wait for the result with `get_task` (up to 45 s per call). The MCP `generate_image` tool itself waits up to 40 s and returns the image links when ready.
 
 ---
 
 ## generate_image
 
 **Endpoint:** `POST /v1/images/generations`
+
+**MCP Tool Parameters** (paid — quote the price with `estimate_cost` and get the user's go-ahead first):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | **Yes** | Model ID from `search_models`. |
+| `input` | object | No | The model's parameters (see Parameters below), exactly as `get_model` lists them for that model. |
+| `prompt` | string | No | Shortcut for `input.prompt`. |
+| `client_request_id` | string | No | Idempotency key, 16–96 characters (letters, digits, `.`, `_`, `-`). Reuse it only to retry the same request after a network error or timeout, so it is not charged twice. |
+| `max_cost_usd` | number | No | Spending cap: nothing is submitted if the estimated cost is higher. |
+
+Waits up to 40 s and returns the image links when ready; otherwise returns a `task_id` for `get_task`.
+
+Example `generate_image` arguments:
+
+```json
+{ "model": "gpt-image-1.5", "input": { "prompt": "A red fox in fresh snow", "size": "1024x1024" } }
+```
 
 ### Parameters
 
@@ -57,9 +75,18 @@ Complete API parameter reference for image generation tools.
 
 ---
 
-## check_task
+## get_task
 
 **Endpoint:** `GET /v1/tasks/{task_id}`
+
+**MCP Tool Parameters** (free):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | **Yes** | `task_id` returned by `generate_image`. |
+| `wait_seconds` | integer 0–45 | No | How long the call may wait for the task to finish (default 30; 0 = quick check). |
+
+Returns the status, progress, result links (they expire after 24 hours), the final charge, or the error with a next step. If the task is still running, call `get_task` again. `list_tasks` reads up to 50 tasks at once.
 
 ### Response Fields
 
@@ -85,10 +112,10 @@ Complete API parameter reference for image generation tools.
 
 | Status | Meaning | Action |
 |--------|---------|--------|
-| `pending` | Queued, not started | Continue polling |
-| `processing` | Generation in progress | Continue polling, report `progress` |
-| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` |
-| `failed` | Generation failed | Read `error.code` + `error.message`, surface to user |
+| `pending` | Queued, not started | Call `get_task` again |
+| `processing` | Generation in progress | Call `get_task` again, report `progress` |
+| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` and give them to the user right away |
+| `failed` | Generation failed | Read `error.code` + `error.message` and the next step, surface to user |
 
 ---
 
@@ -109,13 +136,14 @@ Three upload methods available:
 | Stream | `POST /api/v1/files/upload/stream` | `multipart/form-data` | Have a local file |
 | URL | `POST /api/v1/files/upload/url` | `application/json` | Have a remote URL |
 
-**MCP Tool Parameters:**
+**MCP Tool Parameters** (free; provide exactly one of `file_path`, `base64_data`, `file_url`):
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file_path` | string | One of three | Local file path. Uses stream upload internally. |
-| `base64_data` | string | One of three | Base64-encoded data (raw or Data URL format). |
-| `file_url` | string | One of three | Remote URL. Server downloads and stores it. |
+| `file_path` | string | One of three | Absolute local file path. Uses stream upload internally. Local (stdio) installs only, and the file must be inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. |
+| `base64_data` | string | One of three | Base64-encoded data (raw or Data URL format). For small files. |
+| `mime_type` | string | With raw base64 | MIME type of raw `base64_data` (a Data URL carries its own). |
+| `file_url` | string | One of three | Public HTTPS URL. Server downloads and stores it. Prefer this for large files. |
 | `upload_path` | string | No | Server-side subdirectory for organizing uploads. |
 | `file_name` | string | No | Custom file name. |
 
@@ -133,7 +161,9 @@ Three upload methods available:
 | `data.upload_time` | string | Upload timestamp |
 | `data.expires_at` | string | Expiration timestamp |
 
-### delete_file
+### Delete a File (REST only)
+
+There is no MCP tool for deleting or listing files; uploaded files are deleted automatically after 72 hours.
 
 **Endpoint:** `DELETE /api/v1/files/{file_id}`
 
@@ -141,14 +171,14 @@ Three upload methods available:
 |-----------|------|----------|-------------|
 | `file_id` | string | Yes | File ID to delete |
 
-### list_files
+### List Files & Quota (REST only)
 
-**Endpoints:** `GET /api/v1/files/list` + `GET /api/v1/files/quota` (called together)
+**Endpoints:** `GET /api/v1/files/list` + `GET /api/v1/files/quota`
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
 | `page` | integer | No | Page number (default: 1) |
-| `page_size` | integer | No | Files per page (default: 20, max: 100) |
+| `pageSize` | integer | No | Files per page (default: 20, max: 100) |
 
 ### File Constraints
 
@@ -163,20 +193,22 @@ Three upload methods available:
 
 ## Polling Strategy
 
-### Recommended Intervals
+`get_task` does the waiting: each call waits up to `wait_seconds` (0–45 s, default 30) for the task to finish, so there is no need to pause between calls.
 
-| Type | Initial wait | Poll interval | Max wait |
-|------|-------------|---------------|----------|
-| Image | 3s | 3–5s | 5 minutes |
+### Max Wait
+
+| Type | Max wait |
+|------|----------|
+| Image | 5 minutes |
 
 ### Algorithm
 
-1. Submit `generate_image` → receive `task_id`
-2. Wait 3 seconds (initial delay)
-3. Call `check_task` → inspect `status`
-4. If `pending` or `processing`: wait 3–5 seconds, repeat step 3
-5. If `completed`: extract URLs from `results[]` (array of strings) or `result_data[]` (objects with typed fields)
-6. If `failed`: read `error.code` and `error.message`, surface to user with actionable suggestion
+1. Submit `generate_image` → it returns the image links if they are ready within 40 s; otherwise you get a `task_id`
+2. Call `get_task` with the `task_id` → inspect `status`
+3. If `pending` or `processing`: call `get_task` again
+4. If `completed`: give the result links to the user right away — they expire after 24 hours
+5. If `failed`: show the error and its next step to the user
+6. Never call `generate_image` again to check progress: that creates and charges a new task. After a lost connection, find the task with `list_tasks` before submitting again
 
 ### Timeout Handling
 
@@ -202,7 +234,7 @@ After 5 minutes, inform the user:
 | 502 | Upstream unavailable | Retry after 1 minute |
 | 503 | Service unavailable | Retry after 1–2 minutes |
 
-### Task Error Codes (from check_task when status is "failed")
+### Task Error Codes (from get_task when status is "failed")
 
 | Code | Retryable | Description | Resolution |
 |------|-----------|-------------|------------|
@@ -210,7 +242,7 @@ After 5 minutes, inform the user:
 | `invalid_parameters` | No | Invalid parameter values | Check param values against model limits |
 | `image_dimension_mismatch` | No | Image dimensions don't match request | Resize image to match requested aspect ratio |
 | `image_processing_error` | No | Failed to process input image | Check format (JPG/PNG/WebP), size (<10MB), URL accessibility |
-| `model_unavailable` | No | Model temporarily offline | Call `list_models` to find available alternatives |
+| `model_unavailable` | No | Model temporarily offline | Call `search_models` to find available alternatives |
 | `generation_timeout` | Yes | Generation exceeded time limit | Retry; simplify prompt or lower resolution if repeated |
 | `quota_exceeded` | Yes | Account credits depleted | Wait, then retry. Top up at evolink.ai/dashboard/credits |
 | `resource_exhausted` | Yes | Server resources temporarily full | Wait 30–60 seconds and retry |
@@ -230,7 +262,7 @@ After 5 minutes, inform the user:
 | 404 | File not found | Verify file_id |
 | 40001 | File too large | Compress to under 100MB |
 | 40002 | File type not allowed | Check supported formats (JPEG/PNG/GIF/WebP only) |
-| 40003 | Quota exceeded | Delete files with `delete_file` to free quota |
+| 40003 | Quota exceeded | Uploaded files are deleted automatically after 72 hours; retry later |
 | 40004 | URL download failed | Verify the source URL is accessible |
 | 500 | Server error | Retry |
 | 50001 | Storage service error | Retry after 1 minute |

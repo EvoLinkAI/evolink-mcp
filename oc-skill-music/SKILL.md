@@ -49,7 +49,7 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 **MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
 
-**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" list_models`
+**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" search_models`
 
 **Claude Code:** `claude mcp add evolink-mcp -e EVOLINK_API_KEY=your-key -- npx -y @evolinkai/mcp@latest`
 
@@ -66,15 +66,16 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 | Tool | When to use | Returns |
 |------|-------------|---------|
-| `generate_music` | Create AI music or songs | `task_id` (async) |
+| `generate_audio` | Create AI music or songs (paid) | `task_id` (at once) |
 | `upload_file` | Upload audio for continuation/remix | File URL (sync) |
-| `delete_file` | Free file quota | Confirmation |
-| `list_files` | Check uploaded files or quota | File list |
-| `check_task` | Poll generation progress | Status + result URLs |
-| `list_models` | Compare available models | Model list |
-| `estimate_cost` | Check pricing | Model info |
+| `get_task` | Wait for a task (up to 45 s per call) | Status + result URLs |
+| `list_tasks` | Read several tasks, or find recent ones after a lost connection | Task list + result URLs |
+| `search_models` | Compare available models | Model IDs + starting price |
+| `get_model` | A model's parameters and prices | Parameters + example input |
+| `estimate_cost` | Check the input and quote the price before generating | Cost estimate + balance check |
+| `check_balance` | Check balance or spending | Balance + top-up link |
 
-**Important:** `generate_music` returns a `task_id`. Always poll `check_task` until `status` is `"completed"` or `"failed"`.
+**Important:** `generate_audio` is paid: quote the price with `estimate_cost` and get the user's go-ahead first (the MCP client also asks). It returns a `task_id` at once — call `get_task` until `status` is `"completed"` or `"failed"`. Never call `generate_audio` again to check progress: that creates and charges a new task.
 
 ## Music Models (5, all BETA)
 
@@ -95,7 +96,7 @@ If `401` occurs: "Your API key isn't working. Check at evolink.ai/dashboard/keys
 ### Step 2: File Upload (if needed)
 
 For audio continuation or remix workflows:
-1. `upload_file` with `file_path`, `base64_data`, or `file_url` → get `file_url` (sync)
+1. `upload_file` with exactly one of `file_path` (local installs, inside `EVOLINK_UPLOAD_ALLOWED_DIRS`), `base64_data` (+ `mime_type` if raw), or `file_url` (public HTTPS) → get `file_url` (sync, free)
 
 Supported: Audio (MP3, WAV, FLAC, AAC, OGG, M4A, etc.). Max 100MB. Expire in 72h. Quota: 100 (default) / 500 (VIP).
 
@@ -108,7 +109,9 @@ Ask only what's needed, when it's needed.
 
 ### Step 4: Gather Parameters
 
-Music has two required fields with no defaults — always collect both before calling `generate_music`.
+Music has two required fields with no defaults — always collect both before calling `generate_audio`.
+
+Pass `model` as its own argument and the other parameters inside `input`, e.g. `generate_audio { "model": "suno-v4", "input": { "prompt": "...", "custom_mode": false, "instrumental": true } }`. Names and allowed values differ by model — check them with `get_model`.
 
 **Decision tree (ask in this order):**
 
@@ -129,12 +132,14 @@ Music has two required fields with no defaults — always collect both before ca
 
 ### Step 5: Generate & Poll
 
-1. Call `generate_music` → tell user: *"Generating your music — ~Xs estimated."*
-2. Poll `check_task` every **5–10s**. Report progress %.
-3. After 3 consecutive `processing`: *"Still working..."*
-4. **Completed:** Share URLs + metadata (title, duration, tags from `result_data[]`). *"Links expire in 24h — save promptly."*
-5. **Failed:** Show error + suggestion. Offer retry if retryable.
-6. **Timeout (5 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+1. Quote the price with `estimate_cost` (same `model` and `input`) and get the user's go-ahead.
+2. Call `generate_audio` → tell user: *"Generating your music — ~Xs estimated."*
+3. Call `get_task` with the `task_id` (waits up to 45 s per call) until done. Report progress %.
+4. After 3 consecutive `processing`: *"Still working..."*
+5. **Completed:** Share the audio links right away. *"Links expire in 24h — save promptly."*
+6. **Failed:** Show the error and its next step. Offer retry if retryable.
+7. **Timeout (5 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+8. **Network error or timeout on submit:** retry with the same `client_request_id` (the error gives it), or find the task with `list_tasks` — never submit blindly again.
 
 ## Error Handling
 

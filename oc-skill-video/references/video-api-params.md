@@ -4,13 +4,31 @@ Complete API parameter reference for video generation tools.
 
 **Base URL:** `https://api.evolink.ai`
 **Auth:** `Authorization: Bearer {EVOLINK_API_KEY}`
-**All generation endpoints are async** — they return `task_id` immediately; poll with `check_task`.
+**All generation endpoints are async** — they return `task_id` immediately; wait for the result with `get_task` (up to 45 s per call).
 
 ---
 
 ## generate_video
 
 **Endpoint:** `POST /v1/videos/generations`
+
+**MCP Tool Parameters** (paid — quote the price with `estimate_cost` and get the user's go-ahead first):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | **Yes** | Model ID from `search_models`. |
+| `input` | object | No | The model's parameters (see Parameters below), exactly as `get_model` lists them for that model. |
+| `prompt` | string | No | Shortcut for `input.prompt`. |
+| `client_request_id` | string | No | Idempotency key, 16–96 characters (letters, digits, `.`, `_`, `-`). Reuse it only to retry the same request after a network error or timeout, so it is not charged twice. |
+| `max_cost_usd` | number | No | Spending cap: nothing is submitted if the estimated cost is higher. |
+
+Returns a `task_id` at once (videos take minutes); wait for it with `get_task`. The `generate_audio` parameter below is a video `input` field, not the `generate_audio` tool.
+
+Example `generate_video` arguments:
+
+```json
+{ "model": "seedance-1.5-pro", "input": { "prompt": "A paper boat drifting down a rainy street", "duration": 5, "quality": "720p", "aspect_ratio": "16:9" } }
+```
 
 ### Parameters
 
@@ -75,9 +93,18 @@ Complete API parameter reference for video generation tools.
 
 ---
 
-## check_task
+## get_task
 
 **Endpoint:** `GET /v1/tasks/{task_id}`
+
+**MCP Tool Parameters** (free):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | **Yes** | `task_id` returned by `generate_video`. |
+| `wait_seconds` | integer 0–45 | No | How long the call may wait for the task to finish (default 30; 0 = quick check). |
+
+Returns the status, progress, result links (they expire after 24 hours), the final charge, or the error with a next step. If the task is still running, call `get_task` again. `list_tasks` reads up to 50 tasks at once.
 
 ### Response Fields
 
@@ -101,10 +128,10 @@ All result URLs expire in **24 hours**.
 
 | Status | Meaning | Action |
 |--------|---------|--------|
-| `pending` | Queued, not started | Continue polling |
-| `processing` | Generation in progress | Continue polling, report `progress` |
-| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` |
-| `failed` | Generation failed | Read `error.code` + `error.message`, surface to user |
+| `pending` | Queued, not started | Call `get_task` again |
+| `processing` | Generation in progress | Call `get_task` again, report `progress` |
+| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` and give them to the user right away |
+| `failed` | Generation failed | Read `error.code` + `error.message` and the next step, surface to user |
 
 ---
 
@@ -123,13 +150,14 @@ All file endpoints are **synchronous**.
 | Stream | `POST /api/v1/files/upload/stream` | Have a local file |
 | URL | `POST /api/v1/files/upload/url` | Have a remote URL |
 
-**MCP Tool Parameters:**
+**MCP Tool Parameters** (free; provide exactly one of `file_path`, `base64_data`, `file_url`):
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file_path` | string | One of three | Local file path |
-| `base64_data` | string | One of three | Base64-encoded data |
-| `file_url` | string | One of three | Remote URL |
+| `file_path` | string | One of three | Absolute local file path; local (stdio) installs only, inside `EVOLINK_UPLOAD_ALLOWED_DIRS` |
+| `base64_data` | string | One of three | Base64-encoded data (raw or Data URL), for small files |
+| `mime_type` | string | With raw base64 | MIME type of raw `base64_data` |
+| `file_url` | string | One of three | Public HTTPS URL |
 
 ### File Constraints
 
@@ -142,16 +170,16 @@ All file endpoints are **synchronous**.
 
 ## Polling Strategy
 
-| Type | Initial wait | Poll interval | Max wait |
-|------|-------------|---------------|----------|
-| Video | 15s | 10–15s | 10 minutes |
+| Type | Max wait |
+|------|----------|
+| Video | 10 minutes |
 
-1. Submit `generate_video` → receive `task_id`
-2. Wait 15 seconds
-3. Call `check_task` → inspect `status`
-4. If `pending`/`processing`: wait 10–15s, repeat
-5. If `completed`: extract URLs from `results[]` or `result_data[].video_url`
-6. If `failed`: read `error.code`, surface to user
+1. Submit `generate_video` → receive `task_id` at once
+2. Call `get_task` → it waits up to 45 s per call (`wait_seconds`, default 30); inspect `status`
+3. If `pending`/`processing`: call `get_task` again — no need to pause between calls
+4. If `completed`: give the video links to the user right away (they expire after 24 hours)
+5. If `failed`: read the error and its next step, surface to user
+6. Never call `generate_video` again to check progress: that creates and charges a new task. After a lost connection, find the task with `list_tasks` before submitting again
 
 ---
 
@@ -176,7 +204,7 @@ All file endpoints are **synchronous**.
 | `invalid_parameters` | No | Check param values against model limits |
 | `image_dimension_mismatch` | No | Resize image to match requested aspect ratio |
 | `image_processing_error` | No | Check format (JPG/PNG/WebP), size (<30MB), URL accessibility |
-| `model_unavailable` | No | Use `list_models` to find alternatives |
+| `model_unavailable` | No | Use `search_models` to find alternatives |
 | `generation_timeout` | Yes | Retry; simplify prompt or lower resolution if repeated |
 | `quota_exceeded` | Yes | Top up at evolink.ai/dashboard/credits |
 | `resource_exhausted` | Yes | Wait 30–60s, retry |

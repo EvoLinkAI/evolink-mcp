@@ -49,7 +49,7 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 **MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
 
-**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" list_models`
+**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" search_models`
 
 **Claude Code:** `claude mcp add evolink-mcp -e EVOLINK_API_KEY=your-key -- npx -y @evolinkai/mcp@latest`
 
@@ -66,15 +66,16 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 | Tool | When to use | Returns |
 |------|-------------|---------|
-| `generate_video` | Create a video from text or images | `task_id` (async) |
+| `generate_video` | Create a video from text or images (paid) | `task_id` (at once) |
 | `upload_file` | Upload image for i2v or reference | File URL (sync) |
-| `delete_file` | Free file quota | Confirmation |
-| `list_files` | Check uploaded files or quota | File list |
-| `check_task` | Poll generation progress | Status + result URLs |
-| `list_models` | Compare available models | Model list |
-| `estimate_cost` | Check pricing | Model info |
+| `get_task` | Wait for a task (up to 45 s per call) | Status + result URLs |
+| `list_tasks` | Read several tasks, or find recent ones after a lost connection | Task list + result URLs |
+| `search_models` | Compare available models | Model IDs + starting price |
+| `get_model` | A model's parameters and prices | Parameters + example input |
+| `estimate_cost` | Check the input and quote the price before generating | Cost estimate + balance check |
+| `check_balance` | Check balance or spending | Balance + top-up link |
 
-**Important:** `generate_video` returns a `task_id`. Always poll `check_task` until `status` is `"completed"` or `"failed"`.
+**Important:** `generate_video` is paid: quote the price with `estimate_cost` and get the user's go-ahead first (the MCP client also asks). It returns a `task_id` at once (videos take minutes) — call `get_task` until `status` is `"completed"` or `"failed"`. Never call `generate_video` again to check progress: that creates and charges a new task.
 
 ## Video Models (37)
 
@@ -105,8 +106,8 @@ If `401` occurs: "Your API key isn't working. Check at evolink.ai/dashboard/keys
 ### Step 2: File Upload (if needed)
 
 For image-to-video or first-last-frame workflows:
-1. `upload_file` with `file_path`, `base64_data`, or `file_url` → get `file_url` (sync)
-2. Use `file_url` as `image_urls` for `generate_video`
+1. `upload_file` with exactly one of `file_path` (local installs, inside `EVOLINK_UPLOAD_ALLOWED_DIRS`), `base64_data` (+ `mime_type` if raw), or `file_url` (public HTTPS) → get `file_url` (sync, free)
+2. Use `file_url` in `input.image_urls` for `generate_video`
 
 Supported: JPEG/PNG/GIF/WebP. Max 100MB. Expire in 72h. Quota: 100 (default) / 500 (VIP).
 
@@ -119,7 +120,7 @@ Ask only what's needed, when it's needed.
 
 ### Step 4: Gather Parameters
 
-Only ask about what's missing:
+Only ask about what's missing. Pass `model` as its own argument and the other parameters inside `input`, e.g. `generate_video { "model": "seedance-1.5-pro", "input": { "prompt": "...", "duration": 5, "quality": "720p" } }`. Names and allowed values differ by model — check them with `get_model`.
 
 | Parameter | Ask when | Notes |
 |-----------|----------|-------|
@@ -129,16 +130,18 @@ Only ask about what's missing:
 | **aspect_ratio** | Portrait/widescreen | Default `16:9`. Options: `9:16`, `1:1`, `4:3`, `3:4`, `21:9` |
 | **quality** | Resolution preference | `480p` / `720p` / `1080p` / `4k` |
 | **image_urls** | Reference image provided | 1 image = i2v; 2 images = first+last frame (`seedance-1.5-pro` only) |
-| **generate_audio** | Using seedance/veo3.1 | Ask: "Want auto-generated audio added?" |
+| **generate_audio** | Using seedance/veo3.1 | Ask: "Want auto-generated audio added?" (an `input` parameter, not the `generate_audio` tool) |
 
 ### Step 5: Generate & Poll
 
-1. Call `generate_video` → tell user: *"Generating your video — ~Xs estimated."*
-2. Poll `check_task` every **10–15s**. Report progress %.
-3. After 3 consecutive `processing`: *"Still working — video generation takes a moment..."*
-4. **Completed:** Share URLs. *"Links expire in 24h — save promptly."*
-5. **Failed:** Show error + suggestion. Offer retry if retryable.
-6. **Timeout (10 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+1. Quote the price with `estimate_cost` (same `model` and `input`) and get the user's go-ahead.
+2. Call `generate_video` → tell user: *"Generating your video — ~Xs estimated."*
+3. Call `get_task` with the `task_id` (waits up to 45 s per call) until done. Report progress %.
+4. After 3 consecutive `processing`: *"Still working — video generation takes a moment..."*
+5. **Completed:** Share URLs right away. *"Links expire in 24h — save promptly."*
+6. **Failed:** Show the error and its next step. Offer retry if retryable.
+7. **Timeout (10 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+8. **Network error or timeout on submit:** retry with the same `client_request_id` (the error gives it), or find the task with `list_tasks` — never submit blindly again.
 
 ## Error Handling
 

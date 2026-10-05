@@ -4,13 +4,31 @@ Complete API parameter reference for music generation tools.
 
 **Base URL:** `https://api.evolink.ai`
 **Auth:** `Authorization: Bearer {EVOLINK_API_KEY}`
-**All generation endpoints are async** — they return `task_id` immediately; poll with `check_task`.
+**All generation endpoints are async** — they return `task_id` immediately; wait for the result with `get_task` (up to 45 s per call).
 
 ---
 
-## generate_music
+## generate_audio
 
 **Endpoint:** `POST /v1/audios/generations`
+
+**MCP Tool Parameters** (paid — quote the price with `estimate_cost` and get the user's go-ahead first):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `model` | string | **Yes** | Model ID from `search_models`. |
+| `input` | object | No | The model's parameters (see Parameters below), exactly as `get_model` lists them for that model. |
+| `prompt` | string | No | Shortcut for `input.prompt`. |
+| `client_request_id` | string | No | Idempotency key, 16–96 characters (letters, digits, `.`, `_`, `-`). Reuse it only to retry the same request after a network error or timeout, so it is not charged twice. |
+| `max_cost_usd` | number | No | Spending cap: nothing is submitted if the estimated cost is higher. |
+
+Generates music, songs or speech. Returns a `task_id` at once; wait for it with `get_task`.
+
+Example `generate_audio` arguments:
+
+```json
+{ "model": "suno-v4", "input": { "prompt": "A calm lo-fi beat for studying", "custom_mode": false, "instrumental": true } }
+```
 
 ### Parameters
 
@@ -50,9 +68,18 @@ Complete API parameter reference for music generation tools.
 
 ---
 
-## check_task
+## get_task
 
 **Endpoint:** `GET /v1/tasks/{task_id}`
+
+**MCP Tool Parameters** (free):
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `task_id` | string | **Yes** | `task_id` returned by `generate_audio`. |
+| `wait_seconds` | integer 0–45 | No | How long the call may wait for the task to finish (default 30; 0 = quick check). |
+
+Returns the status, progress, result links (they expire after 24 hours), the final charge, or the error with a next step. If the task is still running, call `get_task` again. `list_tasks` reads up to 50 tasks at once.
 
 ### Response Fields
 
@@ -80,10 +107,10 @@ All result URLs expire in **24 hours**.
 
 | Status | Meaning | Action |
 |--------|---------|--------|
-| `pending` | Queued, not started | Continue polling |
-| `processing` | Generation in progress | Continue polling, report `progress` |
-| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` |
-| `failed` | Generation failed | Read `error.code` + `error.message`, surface to user |
+| `pending` | Queued, not started | Call `get_task` again |
+| `processing` | Generation in progress | Call `get_task` again, report `progress` |
+| `completed` | Generation finished | Extract URLs from `results[]` or `result_data[]` and give them to the user right away |
+| `failed` | Generation failed | Read `error.code` + `error.message` and the next step, surface to user |
 
 ---
 
@@ -102,13 +129,14 @@ All file endpoints are **synchronous**.
 | Stream | `POST /api/v1/files/upload/stream` | Have a local file |
 | URL | `POST /api/v1/files/upload/url` | Have a remote URL |
 
-**MCP Tool Parameters:**
+**MCP Tool Parameters** (free; provide exactly one of `file_path`, `base64_data`, `file_url`):
 
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file_path` | string | One of three | Local file path |
-| `base64_data` | string | One of three | Base64-encoded data |
-| `file_url` | string | One of three | Remote URL |
+| `file_path` | string | One of three | Absolute local file path; local (stdio) installs only, inside `EVOLINK_UPLOAD_ALLOWED_DIRS` |
+| `base64_data` | string | One of three | Base64-encoded data (raw or Data URL), for small files |
+| `mime_type` | string | With raw base64 | MIME type of raw `base64_data` |
+| `file_url` | string | One of three | Public HTTPS URL |
 
 ### File Constraints
 
@@ -121,16 +149,16 @@ All file endpoints are **synchronous**.
 
 ## Polling Strategy
 
-| Type | Initial wait | Poll interval | Max wait |
-|------|-------------|---------------|----------|
-| Music | 5s | 5–10s | 5 minutes |
+| Type | Max wait |
+|------|----------|
+| Music | 5 minutes |
 
-1. Submit `generate_music` → receive `task_id`
-2. Wait 5 seconds
-3. Call `check_task` → inspect `status`
-4. If `pending`/`processing`: wait 5–10s, repeat
-5. If `completed`: extract URLs from `results[]` + metadata from `result_data[]`
-6. If `failed`: read `error.code`, surface to user
+1. Submit `generate_audio` → receive `task_id` at once
+2. Call `get_task` → it waits up to 45 s per call (`wait_seconds`, default 30); inspect `status`
+3. If `pending`/`processing`: call `get_task` again — no need to pause between calls
+4. If `completed`: give the result links to the user right away (they expire after 24 hours)
+5. If `failed`: read the error and its next step, surface to user
+6. Never call `generate_audio` again to check progress: that creates and charges a new task. After a lost connection, find the task with `list_tasks` before submitting again
 
 ---
 
@@ -153,7 +181,7 @@ All file endpoints are **synchronous**.
 |------|-----------|------------|
 | `content_policy_violation` | No | Rephrase prompt or lyrics; avoid explicit content |
 | `invalid_parameters` | No | Check param values — ensure `custom_mode` and `instrumental` are set |
-| `model_unavailable` | No | Use `list_models` to find alternatives |
+| `model_unavailable` | No | Use `search_models` to find alternatives |
 | `generation_timeout` | Yes | Retry; simplify prompt if repeated |
 | `quota_exceeded` | Yes | Top up at evolink.ai/dashboard/credits |
 | `resource_exhausted` | Yes | Wait 30–60s, retry |

@@ -49,7 +49,7 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 **MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
 
-**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" list_models`
+**mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" search_models`
 
 **Claude Code:** `claude mcp add evolink-mcp -e EVOLINK_API_KEY=your-key -- npx -y @evolinkai/mcp@latest`
 
@@ -66,15 +66,16 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 | Tool | When to use | Returns |
 |------|-------------|---------|
-| `generate_image` | Create or edit an image | `task_id` (async) |
+| `generate_image` | Create or edit an image (paid) | Image links (waits up to 40 s), otherwise `task_id` |
 | `upload_file` | Upload local image for editing/reference | File URL (sync) |
-| `delete_file` | Free file quota | Confirmation |
-| `list_files` | Check uploaded files or quota | File list |
-| `check_task` | Poll generation progress | Status + result URLs |
-| `list_models` | Compare available models | Model list |
-| `estimate_cost` | Check pricing | Model info |
+| `get_task` | Wait for a task (up to 45 s per call) | Status + result URLs |
+| `list_tasks` | Read several tasks, or find recent ones after a lost connection | Task list + result URLs |
+| `search_models` | Compare available models | Model IDs + starting price |
+| `get_model` | A model's parameters and prices | Parameters + example input |
+| `estimate_cost` | Check the input and quote the price before generating | Cost estimate + balance check |
+| `check_balance` | Check balance or spending | Balance + top-up link |
 
-**Important:** `generate_image` returns a `task_id`. Always poll `check_task` until `status` is `"completed"` or `"failed"`.
+**Important:** `generate_image` is paid: quote the price with `estimate_cost` and get the user's go-ahead first (the MCP client also asks). It waits up to 40 s and returns the image links when ready; otherwise it returns a `task_id` — call `get_task` until `status` is `"completed"` or `"failed"`. Never call `generate_image` again to check progress: that creates and charges a new task.
 
 ## Nano Banana 2
 
@@ -117,8 +118,8 @@ If `401` occurs: "Your API key isn't working. Check at evolink.ai/dashboard/keys
 ### Step 2: File Upload (if needed)
 
 For image editing or reference workflows:
-1. `upload_file` with `file_path`, `base64_data`, or `file_url` → get `file_url` (sync)
-2. Use `file_url` as `image_urls` for `generate_image`
+1. `upload_file` with exactly one of `file_path` (local installs, inside `EVOLINK_UPLOAD_ALLOWED_DIRS`), `base64_data` (+ `mime_type` if raw), or `file_url` (public HTTPS) → get `file_url` (sync, free)
+2. Use `file_url` in `input.image_urls` for `generate_image`
 
 Supported: JPEG/PNG/GIF/WebP. Max 100MB. Expire in 72h. Quota: 100 (default) / 500 (VIP).
 
@@ -131,7 +132,7 @@ Ask only what's needed, when it's needed.
 
 ### Step 4: Gather Parameters
 
-Default to `model: "gemini-3.1-flash-image-preview"` for this skill. Only ask about what's missing:
+Default to `model: "gemini-3.1-flash-image-preview"` for this skill. Only ask about what's missing. Pass `model` as its own argument and the other parameters inside `input`, e.g. `generate_image { "model": "gemini-3.1-flash-image-preview", "input": { "prompt": "...", "size": "16:9" } }`. Names and allowed values differ by model — check them with `get_model`.
 
 | Parameter | Ask when | Notes |
 |-----------|----------|-------|
@@ -143,12 +144,14 @@ Default to `model: "gemini-3.1-flash-image-preview"` for this skill. Only ask ab
 
 ### Step 5: Generate & Poll
 
-1. Call `generate_image` with `model: "gemini-3.1-flash-image-preview"` → tell user: *"Generating with Nano Banana 2 — ~Xs estimated."*
-2. Poll `check_task` every **3–5s**. Report progress %.
-3. After 3 consecutive `processing`: *"Still working..."*
-4. **Completed:** Share URLs. *"Links expire in 24h — save promptly."*
-5. **Failed:** Show error + suggestion. Offer retry if retryable.
-6. **Timeout (5 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+1. Quote the price with `estimate_cost` (same `model` and `input`) and get the user's go-ahead.
+2. Call `generate_image` with `model: "gemini-3.1-flash-image-preview"` and the parameters in `input` → tell user: *"Generating with Nano Banana 2 — ~Xs estimated."* It waits up to 40 s and returns the links if ready.
+3. If it returned a `task_id`, call `get_task` (waits up to 45 s per call) until done. Report progress %.
+4. After 3 consecutive `processing`: *"Still working..."*
+5. **Completed:** Share URLs right away. *"Links expire in 24h — save promptly."*
+6. **Failed:** Show the error and its next step. Offer retry if retryable.
+7. **Timeout (5 min):** *"Taking longer than expected. Task ID: `{id}` — check again later."*
+8. **Network error or timeout on submit:** retry with the same `client_request_id` (the error gives it), or find the task with `list_tasks` — never submit blindly again.
 
 ## Error Handling
 

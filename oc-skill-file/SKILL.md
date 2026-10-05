@@ -26,9 +26,9 @@ Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evo
 
 | Tool | Purpose |
 |------|---------|
-| `upload_file` | Upload a local file and get a public URL |
-| `delete_file` | Delete an uploaded file to free quota |
-| `list_files` | List uploaded files and check storage quota |
+| `upload_file` | Upload a local file and get a public URL (free) |
+
+Uploaded files are deleted automatically after 72 hours; there is no tool to list or delete them.
 
 ## Supported Formats
 
@@ -40,11 +40,14 @@ One file per request, max **100MB**. Uploaded files expire after **72 hours**. Q
 
 ## Parameters
 
+Provide exactly one of `file_path`, `base64_data`, or `file_url`.
+
 | Parameter | Type | Required | Description |
 |-----------|------|----------|-------------|
-| `file_path` | string | One of three | Absolute path to a local file (stream upload) |
-| `base64_data` | string | One of three | Base64-encoded file data (raw or Data URL format) |
-| `file_url` | string | One of three | URL of a remote file (server downloads directly) |
+| `file_path` | string | One of three | Absolute path to a local file (stream upload). Local (stdio) installs only; the file must be inside `EVOLINK_UPLOAD_ALLOWED_DIRS` |
+| `base64_data` | string | One of three | Base64-encoded file data (raw or Data URL format), for small files |
+| `mime_type` | string | With raw base64 | MIME type of raw `base64_data` (a Data URL carries its own) |
+| `file_url` | string | One of three | Public HTTPS URL of a remote file (server downloads directly) |
 | `upload_path` | string | No | Server-side subdirectory |
 | `file_name` | string | No | Custom file name |
 
@@ -52,16 +55,17 @@ One file per request, max **100MB**. Uploaded files expire after **72 hours**. Q
 
 1. Call `upload_file` with `file_path`, `base64_data`, or `file_url`
 2. Get back `file_url` and `download_url` immediately (synchronous)
-3. Use `file_url` as input for generation tools (`image_urls`, audio input, etc.)
-4. When quota is full, use `list_files` to check and `delete_file` to free space
+3. Put `file_url` in the `input` of a generate tool (`image_urls`, audio input, etc.)
+4. Files are deleted automatically after 72 hours
 
 ## Examples
 
 ```
 User: "I want to turn this photo into a video"
 → upload_file(file_path: "/path/to/photo.jpg")
-→ generate_video(prompt: "animate this photo", image_urls: ["<returned file_url>"])
-→ check_task(task_id: "<task_id>")
+→ estimate_cost(model: "seedance-1.5-pro", input: { prompt: "animate this photo", image_urls: ["<returned file_url>"] }) → quote the price, get the user's go-ahead
+→ generate_video(model: "seedance-1.5-pro", input: { prompt: "animate this photo", image_urls: ["<returned file_url>"] })
+→ get_task(task_id: "<task_id>") → waits up to 45 s; call again until completed, then share the links (they expire after 24 hours)
 ```
 
 ```
