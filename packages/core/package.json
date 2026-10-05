@@ -9,7 +9,7 @@
     "build": "echo 'Core is compiled by entry packages'"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {

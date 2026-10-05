@@ -150,15 +150,20 @@ export function createRemoteHandler(options: RemoteServiceOptions): (req: Incomi
     }
   }
 
-  async function credentialsFor(principal: Principal, needsKey: boolean, event: Record<string, unknown>): Promise<RequestCredentials> {
-    if (principal.kind === 'api-key') return { apiKey: principal.apiKey };
-    if (!needsKey) return { unavailableReason: NO_KEY_NEEDED };
-    if (!options.keyResolver) return { unavailableReason: KEY_LOOKUP_FAILED };
+  async function credentialsFor(
+    principal: Principal,
+    needsKey: boolean,
+    clientName: string | undefined,
+    event: Record<string, unknown>,
+  ): Promise<RequestCredentials> {
+    if (principal.kind === 'api-key') return { apiKey: principal.apiKey, clientName };
+    if (!needsKey) return { unavailableReason: NO_KEY_NEEDED, clientName };
+    if (!options.keyResolver) return { unavailableReason: KEY_LOOKUP_FAILED, clientName };
     try {
-      return { apiKey: await options.keyResolver.resolve(principal.identity) };
+      return { apiKey: await options.keyResolver.resolve(principal.identity), clientName };
     } catch (error) {
       event.key_error = error instanceof Error ? error.message : 'unknown';
-      return { unavailableReason: error instanceof KeyUnavailableError ? error.message : KEY_LOOKUP_FAILED };
+      return { unavailableReason: error instanceof KeyUnavailableError ? error.message : KEY_LOOKUP_FAILED, clientName };
     }
   }
 
@@ -204,10 +209,11 @@ export function createRemoteHandler(options: RemoteServiceOptions): (req: Incomi
     const calls = describeRpc(body);
     event.rpc = calls.methods;
     if (calls.tools.length > 0) event.tools = calls.tools;
-    const credentials = await credentialsFor(principal, calls.tools.length > 0, event);
+    const clientName = req.headers['user-agent']?.slice(0, 200);
+    const credentials = await credentialsFor(principal, calls.tools.length > 0, clientName, event);
 
     // Stateless: a fresh server and transport per request, closed with the response.
-    const server = createMcpServer(options.config, { localFileUploads: false });
+    const server = createMcpServer(options.config, { localFileUploads: false, trackClientName: false });
     const transport = new StreamableHTTPServerTransport({ sessionIdGenerator: undefined, enableJsonResponse: true });
     res.on('close', () => {
       void transport.close();

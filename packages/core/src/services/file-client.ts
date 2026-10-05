@@ -2,11 +2,11 @@ import { randomUUID } from 'node:crypto';
 import { createReadStream } from 'node:fs';
 import { Readable } from 'node:stream';
 import { getApiKey } from '../config.js';
-import { ApiHttpError, withRetry } from './api-client.js';
+import { ApiHttpError } from './api-client.js';
+import { classifyGatewayError, formatGatewayError } from './error-handler.js';
 import {
-  DEFAULT_READ_TIMEOUT_MS,
   DEFAULT_WRITE_TIMEOUT_MS,
-  PaidRequestOutcomeUnknownError,
+  evoHeaders,
   fetchWithTimeout,
   newRunId,
   parseRetryAfter,
@@ -30,23 +30,6 @@ export interface FileUploadData {
   expires_at: string;
 }
 
-export interface FileListData {
-  total: number;
-  files: Array<{
-    file_id: string;
-    file_name: string;
-    file_size: number;
-    upload_time: string;
-  }>;
-}
-
-export interface FileQuotaData {
-  user_group: string;
-  used_files: number;
-  max_files: number;
-  remain_files: number;
-}
-
 interface FileApiResponse<T = unknown> {
   success: boolean;
   code: number;
@@ -55,73 +38,41 @@ interface FileApiResponse<T = unknown> {
   request_id?: string;
 }
 
-function requestHeaders(tool: string, idempotencyKey?: string): Record<string, string> {
-  const headers: Record<string, string> = {
+function requestHeaders(tool: string): Record<string, string> {
+  const runId = newRunId();
+  return {
     'Authorization': `Bearer ${getApiKey()}`,
-    'X-Evo-Client': 'mcp',
-    'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
-    'X-Evo-Tool': tool,
+    ...evoHeaders(tool),
+    'Idempotency-Key': runId,
+    'X-Evo-Run-Id': runId,
   };
-  if (idempotencyKey) {
-    headers['Idempotency-Key'] = idempotencyKey;
-    headers['X-Evo-Run-Id'] = idempotencyKey;
-  }
-  return headers;
 }
 
-function formatFileError(status: number, data: unknown): string {
-  const body = data as Record<string, unknown>;
-  if (body?.msg && typeof body.msg === 'string') {
-    return `File API error (${body.code ?? status}): ${body.msg}`;
-  }
-  if (body?.message && typeof body.message === 'string') {
-    return `File API HTTP ${status}: ${body.message}`;
-  }
-  return `File API HTTP ${status}`;
+function apiError(status: number, data: unknown, headers: Headers): ApiHttpError {
+  const retryAfterMs = parseRetryAfter(headers.get('retry-after'));
+  const info = classifyGatewayError(status, data, retryAfterMs, responseRequestId(headers));
+  return new ApiHttpError(status, formatGatewayError(info), retryAfterMs, info.request_id, info);
 }
 
 async function parseResponse<T>(response: Response): Promise<FileApiResponse<T>> {
   const data = await readJsonBody(response);
-  const requestId = responseRequestId(response.headers);
-  if (!response.ok) {
-    throw new ApiHttpError(
-      response.status,
-      formatFileError(response.status, data),
-      parseRetryAfter(response.headers.get('retry-after')),
-      requestId,
-    );
-  }
+  if (!response.ok) throw apiError(response.status, data, response.headers);
   const body = data as FileApiResponse<T>;
   if (body.success === false) {
-    throw new ApiHttpError(body.code, formatFileError(body.code, data), undefined, requestId);
+    const status = typeof body.code === 'number' && body.code >= 400 && body.code < 600 ? body.code : 400;
+    throw apiError(status, data, response.headers);
   }
+  const requestId = responseRequestId(response.headers);
   if (!body.request_id && requestId) body.request_id = requestId;
   return body;
 }
 
-async function jsonRequest<T>(
-  method: 'GET' | 'POST' | 'DELETE',
-  path: string,
-  tool: string,
-  body?: Record<string, string>,
-  idempotencyKey?: string,
-): Promise<FileApiResponse<T>> {
-  const headers = requestHeaders(tool, idempotencyKey);
-  if (body) headers['Content-Type'] = 'application/json';
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(`${FILES_API_BASE_URL}${path}`, {
-      method,
-      headers,
-      body: body ? JSON.stringify(body) : undefined,
-    }, timeoutFromEnv(
-      method === 'GET' ? 'EVOLINK_MCP_READ_TIMEOUT_MS' : 'EVOLINK_MCP_WRITE_TIMEOUT_MS',
-      method === 'GET' ? DEFAULT_READ_TIMEOUT_MS : DEFAULT_WRITE_TIMEOUT_MS,
-    ));
-  } catch (error) {
-    if (method !== 'GET') throw new PaidRequestOutcomeUnknownError(error);
-    throw error;
-  }
+async function jsonUpload<T>(path: string, body: Record<string, string>): Promise<FileApiResponse<T>> {
+  const response = await fetchWithTimeout(`${FILES_API_BASE_URL}${path}`, {
+    method: 'POST',
+    headers: { ...requestHeaders('upload_file'), 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  }, timeoutFromEnv('EVOLINK_MCP_WRITE_TIMEOUT_MS', DEFAULT_WRITE_TIMEOUT_MS));
   return parseResponse<T>(response);
 }
 
@@ -133,7 +84,7 @@ export async function fileBase64Upload(
   const body: Record<string, string> = { base64_data: base64Data };
   if (uploadPath) body.upload_path = uploadPath;
   if (fileName) body.file_name = fileName;
-  return jsonRequest('POST', '/api/v1/files/upload/base64', 'upload_file', body, newRunId());
+  return jsonUpload('/api/v1/files/upload/base64', body);
 }
 
 function multipartField(name: string, value: string): Buffer {
@@ -174,7 +125,7 @@ export async function fileStreamUpload(
     yield suffix;
   }
 
-  const headers = requestHeaders('upload_file', newRunId());
+  const headers = requestHeaders('upload_file');
   headers['Content-Type'] = `multipart/form-data; boundary=${boundary}`;
   headers['Content-Length'] = String(prefix.length + fileSize + suffix.length);
   const init = {
@@ -183,16 +134,11 @@ export async function fileStreamUpload(
     body: Readable.from(multipartBody()) as unknown as RequestInit['body'],
     duplex: 'half' as const,
   };
-  let response: Response;
-  try {
-    response = await fetchWithTimeout(
-      `${FILES_API_BASE_URL}/api/v1/files/upload/stream`,
-      init as RequestInit,
-      timeoutFromEnv('EVOLINK_MCP_WRITE_TIMEOUT_MS', DEFAULT_WRITE_TIMEOUT_MS),
-    );
-  } catch (error) {
-    throw new PaidRequestOutcomeUnknownError(error);
-  }
+  const response = await fetchWithTimeout(
+    `${FILES_API_BASE_URL}/api/v1/files/upload/stream`,
+    init as RequestInit,
+    timeoutFromEnv('EVOLINK_MCP_WRITE_TIMEOUT_MS', DEFAULT_WRITE_TIMEOUT_MS),
+  );
   return parseResponse<FileUploadData>(response);
 }
 
@@ -204,26 +150,5 @@ export async function fileUrlUpload(
   const body: Record<string, string> = { file_url: fileUrl };
   if (uploadPath) body.upload_path = uploadPath;
   if (fileName) body.file_name = fileName;
-  return jsonRequest('POST', '/api/v1/files/upload/url', 'upload_file', body, newRunId());
-}
-
-export async function fileDelete(fileId: string): Promise<FileApiResponse> {
-  return jsonRequest('DELETE', `/api/v1/files/${fileId}`, 'delete_file', undefined, newRunId());
-}
-
-export async function fileList(page = 1, pageSize = 20): Promise<FileApiResponse<FileListData>> {
-  const query = new URLSearchParams({ page: String(page), pageSize: String(pageSize) });
-  return withRetry(
-    () => jsonRequest('GET', `/api/v1/files/list?${query}`, 'list_files'),
-    3,
-    1_500,
-  );
-}
-
-export async function fileQuota(): Promise<FileApiResponse<FileQuotaData>> {
-  return withRetry(
-    () => jsonRequest('GET', '/api/v1/files/quota', 'list_files'),
-    3,
-    1_500,
-  );
+  return jsonUpload('/api/v1/files/upload/url', body);
 }

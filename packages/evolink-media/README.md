@@ -1,6 +1,6 @@
 # @evolinkai/mcp
 
-> Generate AI videos, images & music with one API key. 60+ models including Sora, Kling, Veo, Seedance, GPT Image, Suno, and more.
+> Generate AI videos, images & music with one API key. 150+ models including Seedance, Kling, Veo, Sora, GPT Image, Suno, and more.
 
 **EvoLink Media** is an MCP (Model Context Protocol) server that gives AI assistants like Claude the ability to generate multimedia content through a unified API.
 
@@ -44,42 +44,24 @@ Go to **Settings → MCP** and add:
 
 ## Available Tools
 
-| Tool | Description |
-|------|-------------|
-| `generate_image` | Generate AI images (async, returns task_id) |
-| `generate_video` | Generate AI videos (async, returns task_id) |
-| `generate_music` | Generate AI music (async, returns task_id) |
-| `list_models` | List available models with features |
-| `estimate_cost` | Calculate a workload-specific maximum with production SKU rules |
-| `diagnose_request` | Read redacted recovery facts for an account-owned request |
-| `check_task` | Check async task status and results |
-| `upload_file` | Upload explicitly confirmed media |
-| `list_files` | List files and quota |
-| `delete_file` | Permanently delete a confirmed file |
-| `model_health` | Read canonical model availability |
-| `mcp_setup` | Read versioned secret-free setup facts |
+| Tool | Description | Cost |
+|------|-------------|------|
+| `search_models` | Find image, video and audio models by type and keywords | Free |
+| `get_model` | A model's parameters, prices and an example input | Free |
+| `estimate_cost` | Check an input and estimate its cost, without submitting | Free |
+| `generate_image` | Generate or edit images (waits up to 40 s for the result) | Paid |
+| `generate_video` | Generate a video (returns a task_id) | Paid |
+| `generate_audio` | Generate music, songs or speech (returns a task_id) | Paid |
+| `get_task` | Check a task, waiting up to 45 s; result links and final charge | Free |
+| `list_tasks` | Read up to 50 tasks, or find recent ones | Free |
+| `upload_file` | Turn a media file into a link for generation input | Free |
+| `check_balance` | Account balance, this key's spend, top-up link | Free |
 
-Paid generation tools require `confirm_cost=true`. A single bounded retry may
-reuse the exact same durable idempotency key and can never create a second paid
-intent. File upload requires `confirm_upload=true`; local paths must be
-inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. File deletion requires
-`confirm_delete=true` and is advertised to MCP clients as destructive.
-CLI-managed installations may set `EVOLINK_CREDENTIAL_HELPER` instead of
-serializing `EVOLINK_API_KEY`. Model, pricing, health, and setup facts come from
-the versioned GroAPI Canonical Catalog with an explicitly labeled fallback.
+There is no server-side approval step: the generate tools are marked destructive so the client asks before running them, and the assistant is told to quote the price with `estimate_cost` first. `max_cost_usd` optionally caps one generation. Every submit carries an idempotency key; after a network error, repeating the call with the returned `client_request_id` cannot charge twice. Inputs are checked against the documented parameters before anything is sent, and errors are classified by the gateway's error code with a next step. Local upload paths must be inside `EVOLINK_UPLOAD_ALLOWED_DIRS`. CLI-managed installations may set `EVOLINK_CREDENTIAL_HELPER` instead of serializing `EVOLINK_API_KEY`.
 
-## Supported Models (60+)
+## Models
 
-### Video (37 models)
-`seedance-1.5-pro`, `sora-2-preview`, `kling-o3-text-to-video`, `veo-3.1-generate-preview`, `MiniMax-Hailuo-2.3`, `wan2.6-text-to-video`, `sora-2` [BETA], `veo3.1-pro` [BETA], and more.
-
-### Image (19 models)
-`gpt-image-1.5`, `z-image-turbo`, `doubao-seedream-4.5`, `qwen-image-edit`, `gpt-4o-image` [BETA], and more.
-
-### Music (5 models, all [BETA])
-`suno-v4`, `suno-v4.5`, `suno-v5`
-
-Use `list_models` tool to see the full catalog.
+150+ image, video and audio models (Seedance, Kling, Veo, Sora, Suno, GPT Image, Nano Banana and more). Use `search_models` to browse them with prices.
 
 ## License
 

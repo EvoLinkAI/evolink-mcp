@@ -10,10 +10,13 @@ import { unconfiguredKeyResolver } from '../packages/remote/dist/remote/src/key-
 import { loadSettings } from '../packages/remote/dist/remote/src/settings.js';
 import { getApiKey } from '../packages/remote/dist/core/src/config.js';
 import { runWithRequestCredentials } from '../packages/remote/dist/core/src/request-context.js';
+import { setPollIntervalForTests } from '../packages/remote/dist/core/src/tools/task-format.js';
 
 const ISSUER = 'https://passport.test';
 const RESOURCE = 'https://mcp.test/mcp';
 const METADATA_URL = 'https://mcp.test/.well-known/oauth-protected-resource/mcp';
+const IMAGE_MODEL = 'gemini-3.1-flash-image-preview';
+const USER_AGENT = 'remote-test-agent/1.0';
 
 const cleanups = [];
 let gateway;
@@ -21,6 +24,7 @@ let jwks;
 const signingKey = newSigningKey('k1');
 
 test.before(async () => {
+  setPollIntervalForTests(20);
   gateway = await startGateway();
   jwks = await startJwks([signingKey.jwk]);
   process.env.EVOLINK_CONTROL_BASE = gateway.url;
@@ -112,7 +116,7 @@ test('signed-in clients list hosted tools and pay with their own connection key'
 
   const { tools } = await client.listTools();
   const names = tools.map(tool => tool.name);
-  for (const name of ['generate_image', 'generate_video', 'check_task', 'upload_file', 'estimate_cost']) {
+  for (const name of ['generate_image', 'generate_video', 'get_task', 'upload_file', 'estimate_cost', 'check_balance', 'search_models']) {
     assert.ok(names.includes(name), name);
   }
   const upload = tools.find(tool => tool.name === 'upload_file');
@@ -123,14 +127,16 @@ test('signed-in clients list hosted tools and pay with their own connection key'
 
   const result = await client.callTool({
     name: 'generate_image',
-    arguments: { prompt: 'a red apple', model: 'gpt-image-1', confirm_cost: true },
+    arguments: { prompt: 'a red apple', model: IMAGE_MODEL },
   });
   assert.notEqual(result.isError, true, JSON.stringify(result));
-  assert.match(result.content[0].text, /Task ID: task_/);
+  assert.match(result.content[0].text, /Task task_\d+: completed/);
 
   const generation = gateway.calls.filter(call => call.path === '/v1/images/generations').at(-1);
   assert.equal(generation.authorization, 'Bearer sk-conn-sess_1');
   assert.equal(generation.body.confirm_cost, undefined);
+  assert.equal(generation.body.model, IMAGE_MODEL);
+  assert.equal(generation.clientName, USER_AGENT, 'the hosted service reports the assistant from its User-Agent');
   assert.deepEqual(service.resolved.at(-1), {
     subject: 'usr_test',
     sessionId: 'sess_1',
@@ -159,10 +165,11 @@ test('without a key service, paid tools fail clearly and never fall back to proc
     const before = gateway.calls.filter(call => call.path === '/v1/images/generations').length;
     const result = await client.callTool({
       name: 'generate_image',
-      arguments: { prompt: 'a blue pear', model: 'gpt-image-1', confirm_cost: true },
+      arguments: { prompt: 'a blue pear', model: IMAGE_MODEL },
     });
     assert.equal(result.isError, true);
     assert.match(result.content[0].text, /not enabled on this server yet/);
+    assert.match(result.content[0].text, /Nothing was submitted or charged/);
     assert.equal(gateway.calls.filter(call => call.path === '/v1/images/generations').length, before);
     assert.ok(!gateway.calls.some(call => call.authorization?.includes('sk-process-wide')));
     await client.close();
@@ -184,8 +191,8 @@ test('API key mode forwards each caller key and keeps concurrent requests apart'
   const alpha = await connect(service.url, 'sk-user-alpha-0001');
   const bravo = await connect(service.url, 'sk-user-bravo-0002');
   const [slow, fast] = await Promise.all([
-    alpha.callTool({ name: 'generate_image', arguments: { prompt: 'alpha wait=200', model: 'gpt-image-1', confirm_cost: true } }),
-    delay(20).then(() => bravo.callTool({ name: 'generate_image', arguments: { prompt: 'bravo wait=0', model: 'gpt-image-1', confirm_cost: true } })),
+    alpha.callTool({ name: 'generate_image', arguments: { prompt: 'alpha wait=200', model: IMAGE_MODEL } }),
+    delay(20).then(() => bravo.callTool({ name: 'generate_image', arguments: { prompt: 'bravo wait=0', model: IMAGE_MODEL } })),
   ]);
   assert.notEqual(slow.isError, true, JSON.stringify(slow));
   assert.notEqual(fast.isError, true, JSON.stringify(fast));
@@ -324,7 +331,7 @@ async function startService(overrides = {}) {
 async function connect(serviceUrl, token) {
   const client = new Client({ name: 'evolink-remote-test', version: '1.0.0' });
   const transport = new StreamableHTTPClientTransport(new URL(`${serviceUrl}/mcp`), {
-    requestInit: { headers: { Authorization: `Bearer ${token}` } },
+    requestInit: { headers: { Authorization: `Bearer ${token}`, 'User-Agent': USER_AGENT } },
   });
   await client.connect(transport);
   return client;
@@ -388,27 +395,21 @@ async function startGateway() {
     for await (const chunk of req) chunks.push(chunk);
     const raw = Buffer.concat(chunks).toString('utf8');
     const body = raw ? JSON.parse(raw) : undefined;
-    calls.push({ method: req.method, path: req.url, authorization: req.headers.authorization, body });
-    if (req.url.startsWith('/v1/catalog/models')) {
-      res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({
-        meta: { catalog_version: 'cat-test', schema_version: '1' },
-        models: [{
-          model_id: 'gpt-image-1', display_name: 'GPT Image 1', provider: 'EvoLink', aliases: [],
-          capabilities: ['image'], protocols: ['openai-images'], lifecycle: 'active',
-        }],
-      }));
-      return;
-    }
+    const send = (status, payload, headers = {}) => {
+      res.writeHead(status, { 'content-type': 'application/json', ...headers });
+      res.end(JSON.stringify(payload));
+    };
+    calls.push({ method: req.method, path: req.url, authorization: req.headers.authorization, clientName: req.headers['x-evo-client-name'], body });
     if (req.method === 'POST' && req.url === '/v1/images/generations') {
       const wait = Number(/wait=(\d+)/.exec(body?.prompt ?? '')?.[1] ?? 0);
       if (wait) await delay(wait);
-      res.writeHead(200, { 'content-type': 'application/json', 'x-request-id': 'req_gateway' });
-      res.end(JSON.stringify({ id: `task_${calls.length}`, status: 'pending', task_info: { estimated_time: 5 } }));
-      return;
+      return send(200, { id: `task_${calls.length}`, status: 'pending', model: body?.model, type: 'image', progress: 0, task_info: { estimated_time: 5 } }, { 'x-request-id': 'req_gateway' });
     }
-    res.writeHead(404, { 'content-type': 'application/json' });
-    res.end('{}');
+    if (req.method === 'GET' && req.url.startsWith('/v1/tasks/')) {
+      const id = decodeURIComponent(req.url.slice('/v1/tasks/'.length));
+      return send(200, { id, object: 'task', created: 1, model: IMAGE_MODEL, type: 'image', status: 'completed', progress: 100, results: [`https://files.evolink.ai/${id}.png`], usage: { credits_used: 6.1 } });
+    }
+    return send(404, {});
   });
   return { ...server, calls };
 }

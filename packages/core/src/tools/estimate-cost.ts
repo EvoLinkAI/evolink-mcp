@@ -1,60 +1,89 @@
 import { z } from 'zod';
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
-import { estimateWorkload } from '../services/catalog-client.js';
+import type { ServerConfig } from '../config.js';
+import { getCredits } from '../services/api-client.js';
+import { resolveModel, suggestModels } from '../services/model-catalog.js';
+import { formatIssues, validateInput, type ValidationResult } from '../services/param-validator.js';
+import { estimateCost, formatEstimateRange } from '../services/pricing-client.js';
+import { TOP_UP_URL } from '../services/http-policy.js';
+import { READ_ONLY, errorResult, failure, money, ok } from './shared.js';
 
-const schema = {
-  model: z.string().describe('Canonical model ID to estimate'),
-  operation: z.enum(['text-generation', 'image-generation', 'video-generation', 'audio-generation'])
-    .describe('Workload type; it must match the model capability'),
-  input_tokens: z.number().int().min(1).max(10_000_000).optional()
-    .describe('Required for text-generation'),
-  max_output_tokens: z.number().int().min(1).max(10_000_000).optional()
-    .describe('Required for text-generation'),
-  count: z.number().int().min(1).max(16).optional()
-    .describe('Required for image-generation'),
-  duration_seconds: z.number().int().min(1).max(3600).optional()
-    .describe('Required for video-generation and audio-generation'),
-  quality: z.string().max(32).optional().describe('Optional canonical quality tier such as 1080p or 4k'),
-};
-
-export function registerEstimateCost(server: McpServer): void {
-  server.tool(
-    'estimate_cost',
-    'Calculate a request-specific maximum estimate with EvoLink production SKU rules. This does not submit a paid generation.',
-    schema,
-    { readOnlyHint: true, destructiveHint: false, idempotentHint: true, openWorldHint: false },
-    async (params) => {
-      try {
-        const estimate = await estimateWorkload(params.model, params.operation, {
-          input_tokens: params.input_tokens,
-          max_output_tokens: params.max_output_tokens,
-          count: params.count,
-          duration_seconds: params.duration_seconds,
-          quality: params.quality,
-        });
-        const lines = [
-          `Estimate: ${estimate.estimate_id}`,
-          `Model: ${estimate.model_id}`,
-          `Operation: ${estimate.operation}`,
-          `Catalog: ${estimate.catalog_version}`,
-          `Estimated maximum cost: ${estimate.currency} ${estimate.amount}`,
-          `Valid until: ${estimate.expires_at}`,
-          '',
-          ...estimate.assumptions.map(value => `- ${value}`),
-          '',
-          'This estimate does not submit or reserve a paid task. A separate generation call still requires confirm_cost=true.',
-        ];
-        return { content: [{ type: 'text' as const, text: lines.join('\n') }] };
-      } catch (error) {
-        const reason = error instanceof Error ? error.message : 'unknown estimate failure';
-        return {
-          content: [{
-            type: 'text' as const,
-            text: `A production-aligned workload estimate is unavailable for ${params.model}: ${reason}. Do not infer a price or submit a paid generation without a successful estimate.`,
-          }],
-          isError: true,
-        };
-      }
+export function registerEstimateCost(server: McpServer, config: ServerConfig): void {
+  server.registerTool('estimate_cost', {
+    title: 'Estimate cost',
+    description: [
+      'Check a generation input and estimate what it will cost, without submitting anything. Free.',
+      'Returns whether the input is valid, the expected price range in USD and credits, what it is based on, and whether the balance covers it.',
+      'Call it before a paid generate_* call and tell the user the price.',
+    ].join(' '),
+    inputSchema: {
+      model: z.string().min(1).max(128).describe('Model ID, e.g. "seedance-2.0-text-to-video".'),
+      input: z.record(z.unknown()).optional()
+        .describe('The input you plan to pass to the generate tool, e.g. {"prompt":"…","duration":5,"quality":"1080p"}.'),
     },
-  );
+    annotations: { title: 'Estimate cost', ...READ_ONLY },
+  }, async ({ model, input }) => {
+    try {
+      const { catalog, entry } = await resolveModel(model);
+      if (!entry) {
+        const suggestions = suggestModels(catalog, model);
+        return failure(
+          `Unknown model "${model}".${suggestions.length ? ` Did you mean: ${suggestions.join(', ')}?` : ''} Use search_models to find model IDs.`,
+          { error: { category: 'not_found', param: 'model' }, suggestions },
+        );
+      }
+      const values = input ?? {};
+      const validation: ValidationResult | undefined = entry.spec ? validateInput(entry.spec, values) : undefined;
+      const estimate = estimateCost(entry.priced, entry.kind, values, entry.spec);
+
+      const lines = [`Estimate for ${entry.id} (${entry.kind}); nothing was submitted or charged.`];
+      if (!validation) {
+        lines.push('Input not checked: this model\'s parameters are not documented here.');
+      } else if (validation.errors.length > 0) {
+        lines.push(`Input problems (generate_${entry.kind} would refuse this input):`, ...formatIssues(validation.errors));
+      } else {
+        lines.push('Input looks valid.');
+      }
+      if (validation?.warnings.length) lines.push('Warnings:', ...formatIssues(validation.warnings));
+
+      const range = formatEstimateRange(estimate);
+      if (estimate.status === 'estimated' && range) lines.push(`Estimated cost: ${range}`);
+      else if (estimate.status === 'token_billed') lines.push('Cost: billed by tokens used; it is only known after the task runs.');
+      else if (estimate.status === 'needs_input') lines.push('Cost: cannot estimate yet; see the note below.');
+      else lines.push('Cost: no published price to estimate from.');
+      if (estimate.basis.length) lines.push('Based on:', ...estimate.basis.map(line => `- ${line}`));
+      if (estimate.possible_extras.length) lines.push('May also charge:', ...estimate.possible_extras.map(line => `- ${line}`));
+      for (const note of estimate.notes) lines.push(`Note: ${note}`);
+
+      const structured: Record<string, unknown> = {
+        model: entry.id,
+        type: entry.kind,
+        input_valid: validation ? validation.errors.length === 0 : null,
+        problems: validation?.errors ?? [],
+        warnings: validation?.warnings ?? [],
+        estimate,
+      };
+      try {
+        const credits = await getCredits(config, 'estimate_cost');
+        const balance = Math.max(0, credits.user.remaining_credits);
+        lines.push(`Account balance: ${money(balance)}`);
+        structured.balance_credits = balance;
+        if (estimate.max_credits !== undefined) {
+          const enough = balance >= estimate.max_credits;
+          structured.enough_balance = enough;
+          if (!enough) lines.push(`The balance may not cover this; top up at ${TOP_UP_URL}.`);
+        }
+      } catch {
+        lines.push('Balance: could not be read right now.');
+      }
+      if (catalog.pricingWarning) {
+        lines.push(`Note: ${catalog.pricingWarning}`);
+        structured.pricing_warning = catalog.pricingWarning;
+      }
+      lines.push('This is an estimate from published prices. The amount actually reserved is shown when the task is submitted, and the final charge when it finishes.');
+      return ok(lines.join('\n'), structured);
+    } catch (error) {
+      return errorResult(error);
+    }
+  });
 }

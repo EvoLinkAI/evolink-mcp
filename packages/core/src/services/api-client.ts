@@ -1,11 +1,12 @@
 import { type ServerConfig, getApiKey } from '../config.js';
-import { formatApiError } from './error-handler.js';
+import { classifyGatewayError, formatGatewayError, type GatewayErrorInfo } from './error-handler.js';
 import {
   DEFAULT_READ_TIMEOUT_MS,
-  DEFAULT_WRITE_TIMEOUT_MS,
+  DEFAULT_SUBMIT_TIMEOUT_MS,
   MAX_RETRY_DELAY_MS,
   PaidRequestOutcomeUnknownError,
   RequestTimeoutError,
+  evoHeaders,
   fetchWithTimeout,
   newRunId,
   parseRetryAfter,
@@ -22,8 +23,10 @@ interface RequestOptions {
   body?: Record<string, unknown>;
   idempotencyKey?: string;
   tool?: string;
-  catalogVersion?: string;
+  timeoutMs?: number;
 }
+
+export type TaskStatus = 'pending' | 'processing' | 'completed' | 'failed' | 'cancelled';
 
 export interface TaskResponse {
   created: number;
@@ -31,26 +34,33 @@ export interface TaskResponse {
   model: string;
   object: string;
   progress: number;
-  status: 'pending' | 'processing' | 'completed' | 'failed';
+  status: TaskStatus;
   type: string;
+  duration?: number;
+  video_duration?: number;
   results?: string[];
-  result_data?: ResultDataItem[];
+  result_data?: ResultDataItem[] | Record<string, unknown>;
   task_info?: {
     can_cancel?: boolean;
     estimated_time?: number;
     video_duration?: number;
   };
   usage?: {
-    billing_rule: string;
-    credits_reserved: number;
-    user_group: string;
+    billing_rule?: string;
+    credits_reserved?: number;
+    credits_used?: number;
+    cost?: { credits?: number; usd?: number; cny?: number };
+    user_group?: string;
   };
   error?: {
     code?: string;
     message?: string;
     type?: string;
+    suggestion?: string;
   };
   request_id?: string;
+  /** Set by the MCP client when the gateway answered a repeated Idempotency-Key with the original response. */
+  idempotency_replayed?: boolean;
 }
 
 export interface ResultDataItem {
@@ -64,6 +74,32 @@ export interface ResultDataItem {
   video_url?: string;
 }
 
+export interface TaskListItem {
+  id: string;
+  model: string;
+  type: string;
+  status: TaskStatus;
+  progress: number;
+  created_at: number;
+  duration?: number;
+  has_results?: boolean;
+  result_count?: number;
+  has_error?: boolean;
+  credits_used?: number;
+}
+
+export interface TaskListResponse {
+  data: TaskListItem[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface CreditsResponse {
+  user: { remaining_credits: number; used_credits: number };
+  token: { remaining_credits: number; used_credits: number; unlimited_credits: boolean };
+}
+
 // --- Error class for HTTP-level failures ---
 
 export class ApiHttpError extends Error {
@@ -72,6 +108,7 @@ export class ApiHttpError extends Error {
     message: string,
     public readonly retryAfterMs?: number,
     public readonly requestId?: string,
+    public readonly info?: GatewayErrorInfo,
   ) {
     super(message);
     this.name = 'ApiHttpError';
@@ -87,10 +124,11 @@ function sleep(ms: number): Promise<void> {
 }
 
 function isRetryable(error: unknown): boolean {
+  // Key and balance rejections are always HTTP 402, so they are never retried here.
   if (error instanceof ApiHttpError) return RETRYABLE_STATUS_CODES.has(error.status);
   if (error instanceof PaidRequestOutcomeUnknownError) return true;
   if (error instanceof RequestTimeoutError) return true;
-  if (error instanceof TypeError) return true; // network errors (DNS, timeout, etc.)
+  if (error instanceof TypeError) return true; // network errors (DNS, reset, …)
   return false;
 }
 
@@ -118,36 +156,32 @@ export async function withRetry<T>(
 
 // --- Core request (no retry) ---
 
-async function rawRequest(
-  config: ServerConfig,
-  options: RequestOptions,
-): Promise<TaskResponse> {
+async function rawRequest<T>(config: ServerConfig, options: RequestOptions): Promise<{ data: T; requestId?: string; headers: Headers }> {
   const url = `${config.baseUrl}${options.path}`;
   const headers: Record<string, string> = {
     'Authorization': `Bearer ${getApiKey()}`,
-    'Content-Type': 'application/json',
-    'X-Evo-Client': 'mcp',
-    'X-Evo-Client-Version': process.env.npm_package_version ?? 'dev',
-    'X-Evo-Tool': options.tool ?? 'unknown',
+    'Accept': 'application/json',
+    ...evoHeaders(options.tool ?? 'unknown'),
   };
+  if (options.body) headers['Content-Type'] = 'application/json';
   if (options.idempotencyKey) {
     headers['Idempotency-Key'] = options.idempotencyKey;
     headers['X-Evo-Run-Id'] = options.idempotencyKey;
   }
-  if (options.catalogVersion) headers['X-Catalog-Version'] = options.catalogVersion;
 
+  const isRead = options.method === 'GET' || !options.idempotencyKey;
   let response: Response;
   try {
     response = await fetchWithTimeout(url, {
       method: options.method,
       headers,
       body: options.body ? JSON.stringify(options.body) : undefined,
-    }, timeoutFromEnv(
-      options.method === 'GET' ? 'EVOLINK_MCP_READ_TIMEOUT_MS' : 'EVOLINK_MCP_WRITE_TIMEOUT_MS',
-      options.method === 'GET' ? DEFAULT_READ_TIMEOUT_MS : DEFAULT_WRITE_TIMEOUT_MS,
+    }, options.timeoutMs ?? timeoutFromEnv(
+      isRead ? 'EVOLINK_MCP_READ_TIMEOUT_MS' : 'EVOLINK_MCP_WRITE_TIMEOUT_MS',
+      isRead ? DEFAULT_READ_TIMEOUT_MS : DEFAULT_SUBMIT_TIMEOUT_MS,
     ));
   } catch (error) {
-    if (options.method === 'POST') throw new PaidRequestOutcomeUnknownError(error);
+    if (!isRead) throw new PaidRequestOutcomeUnknownError(error, options.idempotencyKey);
     throw error;
   }
 
@@ -155,51 +189,122 @@ async function rawRequest(
   const requestId = responseRequestId(response.headers);
 
   if (!response.ok) {
-    throw new ApiHttpError(
-      response.status,
-      formatApiError(response.status, data),
-      parseRetryAfter(response.headers.get('retry-after')),
-      requestId,
-    );
+    const retryAfterMs = parseRetryAfter(response.headers.get('retry-after'));
+    const info = classifyGatewayError(response.status, data, retryAfterMs, requestId);
+    throw new ApiHttpError(response.status, formatGatewayError(info), retryAfterMs, info.request_id, info);
   }
-
-  const task = data as TaskResponse;
-  if (!task.request_id && requestId) task.request_id = requestId;
-  return task;
+  return { data: data as T, requestId, headers: response.headers };
 }
 
 // --- Public API ---
 
-/** Submit one paid intent. At most one transport retry reuses the exact same
- * idempotency key; GroAPI's durable ledger prevents duplicate dispatch/billing. */
-export async function apiRequest(
-  config: ServerConfig,
-  options: RequestOptions,
-): Promise<TaskResponse> {
-  if (options.method !== 'POST') {
-    throw new Error('apiRequest only accepts generation POST operations');
-  }
-  const idempotencyKey = newRunId();
-  return withRetry(
-    () => rawRequest(config, { ...options, idempotencyKey }),
+export interface SubmitOptions {
+  path: string;
+  body: Record<string, unknown>;
+  tool: string;
+  /** Reused on a retry of the same intent; a fresh one is generated when absent. */
+  idempotencyKey?: string;
+}
+
+/**
+ * Submit one paid intent. At most one transport retry, always with the same
+ * idempotency key, so the gateway ledger (Idempotency-Key) can return the
+ * original task instead of creating a second one.
+ */
+export async function submitTask(config: ServerConfig, options: SubmitOptions): Promise<TaskResponse> {
+  const idempotencyKey = options.idempotencyKey ?? newRunId();
+  const { data, requestId, headers } = await withRetry(
+    () => rawRequest<TaskResponse>(config, {
+      method: 'POST',
+      path: options.path,
+      body: options.body,
+      tool: options.tool,
+      idempotencyKey,
+    }),
     1,
     500,
   );
+  if (!data.request_id && requestId) data.request_id = requestId;
+  if (headers.get('idempotency-replayed') === 'true') data.idempotency_replayed = true;
+  return data;
 }
 
-/** Query task status (GET). Retries up to 3 times for robust polling. */
-export async function queryTask(
+/** @deprecated kept for callers outside the tools; use submitTask. */
+export async function apiRequest(
   config: ServerConfig,
-  taskId: string,
+  options: { method: 'GET' | 'POST'; path: string; body?: Record<string, unknown>; tool?: string },
 ): Promise<TaskResponse> {
-  return withRetry(
-    () => rawRequest(config, { method: 'GET', path: `/v1/tasks/${taskId}`, tool: 'check_task' }),
-    3,
+  if (options.method !== 'POST' || !options.body) {
+    throw new Error('apiRequest only accepts generation POST operations');
+  }
+  return submitTask(config, { path: options.path, body: options.body, tool: options.tool ?? 'unknown' });
+}
+
+/** One task (GET /v1/tasks/{id}). Unfinished tasks sync with the provider on every read, so callers pace themselves. */
+export async function queryTask(config: ServerConfig, taskId: string, tool = 'get_task'): Promise<TaskResponse> {
+  const { data, requestId } = await withRetry(
+    () => rawRequest<TaskResponse>(config, { method: 'GET', path: `/v1/tasks/${encodeURIComponent(taskId)}`, tool }),
+    2,
     1500,
   );
+  if (!data.request_id && requestId) data.request_id = requestId;
+  return data;
 }
 
-export function formatUsageInfo(usage?: TaskResponse['usage']): string {
-  if (!usage?.credits_reserved) return '';
-  return `Estimated cost: ${usage.credits_reserved} credits (${usage.billing_rule ?? 'standard'})`;
+/** Up to 50 tasks in one call (POST /v1/tasks/batch); unknown or foreign IDs are simply absent. */
+export async function queryTasks(config: ServerConfig, taskIds: string[], tool = 'list_tasks'): Promise<TaskResponse[]> {
+  const { data } = await withRetry(
+    () => rawRequest<{ data?: TaskResponse[] }>(config, {
+      method: 'POST',
+      path: '/v1/tasks/batch',
+      body: { task_ids: taskIds },
+      tool,
+    }),
+    2,
+    1500,
+  );
+  return Array.isArray(data.data) ? data.data : [];
+}
+
+export interface ListTasksQuery {
+  status?: string;
+  type?: string;
+  model?: string;
+  page?: number;
+  pageSize?: number;
+}
+
+/** The account's recent tasks, newest first (GET /v1/tasks). Items carry no result links. */
+export async function listTasks(config: ServerConfig, query: ListTasksQuery, tool = 'list_tasks'): Promise<TaskListResponse> {
+  const params = new URLSearchParams();
+  if (query.status) params.set('status', query.status);
+  if (query.type) params.set('type', query.type);
+  if (query.model) params.set('model', query.model);
+  params.set('page', String(query.page ?? 1));
+  params.set('page_size', String(query.pageSize ?? 20));
+  const { data } = await withRetry(
+    () => rawRequest<Partial<TaskListResponse>>(config, { method: 'GET', path: `/v1/tasks?${params}`, tool }),
+    2,
+    1500,
+  );
+  return {
+    data: Array.isArray(data.data) ? data.data : [],
+    total: typeof data.total === 'number' ? data.total : 0,
+    page: typeof data.page === 'number' ? data.page : query.page ?? 1,
+    page_size: typeof data.page_size === 'number' ? data.page_size : query.pageSize ?? 20,
+  };
+}
+
+/** Account balance and this key's usage (GET /v1/credits). */
+export async function getCredits(config: ServerConfig, tool = 'check_balance'): Promise<CreditsResponse> {
+  const { data, requestId } = await withRetry(
+    () => rawRequest<{ success?: boolean; message?: string; data?: CreditsResponse }>(config, { method: 'GET', path: '/v1/credits', tool }),
+    2,
+    1000,
+  );
+  if (data.success === false || !data.data?.user || !data.data?.token) {
+    const info = classifyGatewayError(500, { error: { message: data.message || 'The balance could not be read.' } }, undefined, requestId);
+    throw new ApiHttpError(500, formatGatewayError(info), undefined, requestId, info);
+  }
+  return data.data;
 }

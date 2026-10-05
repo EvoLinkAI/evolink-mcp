@@ -48,12 +48,16 @@ Layer structure inside core:
 
 | Layer | Path | Role |
 |-------|------|------|
-| Entry | `server.ts` | Creates `McpServer`, registers all tools |
-| Config | `config.ts` | `ServerConfig` (channel + baseUrl), API key validation |
-| Tools | `tools/*.ts` | One file per MCP tool; each exports a `register*` function |
-| Data | `data/models.ts` | Static model catalog (`MODELS[]`), no API calls |
-| Services | `services/api-client.ts` | `apiRequest()` + `queryTask()` — all HTTP calls go here |
-| Services | `services/error-handler.ts` | Maps HTTP status codes and business error types to messages |
+| Entry | `server.ts` | Creates `McpServer` with the server instructions and registers the ten tools |
+| Config | `config.ts` | `ServerConfig` (channel + baseUrl), API key lookup |
+| Request scope | `request-context.ts` | Per-request credentials and assistant name for the hosted service |
+| Tools | `tools/*.ts` | One file per tool (the three generate tools share `generate.ts`); `shared.ts` holds annotations, result and error helpers |
+| Data | `data/model-params.ts` | Parameter index per model, generated from the docs site OpenAPI files into `model-params.generated.ts` |
+| Services | `services/api-client.ts` | Gateway calls: submit with idempotency key, task reads, batch, list, credits |
+| Services | `services/error-handler.ts` | Classifies gateway errors by `error.code` (quota, key, rate limit, idempotency) into a category and next step |
+| Services | `services/param-validator.ts` | Checks an input against the documented parameters before anything is sent |
+| Services | `services/pricing-client.ts` | Public pricing list (cached) and the interim cost estimate |
+| Services | `services/model-catalog.ts` | Merges documented parameters with live prices for lookups |
 
 ### Two Editions
 
@@ -67,25 +71,28 @@ Each entry `index.ts` calls `createConfig('official' | 'beta')` and passes confi
 ### Tool Pattern
 
 Every tool follows the same pattern:
-1. Define a Zod schema object for parameters
-2. Export a `register*` function that calls `server.tool(name, description, schema, handler)`
-3. Handler calls `apiRequest()` (for POST generation) or `queryTask()` (for GET polling)
-4. All generation tools are **async** — they return a `task_id` immediately; callers must poll with `check_task`
+1. Register with `server.registerTool(name, { title, description, inputSchema, annotations }, handler)`
+2. Paid tools use the `PAID` annotations (`destructiveHint: true`), lookups use `READ_ONLY`, uploads use `WRITES`; all set `openWorldHint: false`
+3. Return `ok(text, structured)` or `failure(text, structured)`: the text and the structured content carry the same facts (some clients show the model only one of them)
+4. Convert thrown errors with `errorResult(error, { paid, clientRequestId })`, which adds the category, next step and whether anything was charged
+5. Keep every call under ~45 s: `generate_image` waits up to 40 s, video and audio return a `task_id` at once, `get_task` waits up to 45 s
 
 ### API Endpoints
 
 | Tool | Method | Path |
 |------|--------|------|
-| `generate_image` | POST | `/v1/images/generations` |
-| `generate_video` | POST | `/v1/videos/generations` |
-| `generate_music` | POST | `/v1/audios/generations` |
-| `check_task` | GET | `/v1/tasks/{task_id}` |
+| `generate_image` / `generate_video` / `generate_audio` | POST | `/v1/{images,videos,audios}/generations` (path from the parameter index) |
+| `get_task` | GET | `/v1/tasks/{task_id}` |
+| `list_tasks` | POST / GET | `/v1/tasks/batch`, `/v1/tasks` |
+| `check_balance` | GET | `/v1/credits` |
+| `search_models` / `get_model` / `estimate_cost` | GET | `/web/api/models/pricing` (public, on `EVOLINK_CONTROL_BASE`) |
+| `upload_file` | POST | `files-api.evolink.ai/api/v1/files/upload/{url,base64,stream}` |
 
-`EVOLINK_API_KEY` environment variable is required and validated at startup via `getApiKey()`.
+`EVOLINK_API_KEY` (or the CLI credential helper) is required by the stdio packages and validated at startup via `getApiKey()`.
 
-### Adding a New Model
+### Adding or Updating Models
 
-Update `packages/core/src/data/models.ts` (add to `MODELS[]`) and the relevant tool file's `*_MODELS` const array. Models are categorized as `image | video | music | digital-human`.
+Parameters come from the docs site: run `node scripts/build-model-params.mjs <path-to-mintlify-docs> $(git -C <path-to-mintlify-docs> rev-parse --short HEAD)` and commit the regenerated `packages/core/src/data/model-params.generated.ts`. Prices are read live from the pricing list, so new prices need no release.
 
 ### Skill Definitions
 

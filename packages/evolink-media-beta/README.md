@@ -38,7 +38,7 @@ Get your API key at [evolink.ai/dashboard/keys](https://evolink.ai/dashboard/key
 
 | | Official (`@evolinkai/mcp`) | Beta (`@evolinkai/mcp-beta`) |
 |---|---|---|
-| Models | 60+ (same) | 60+ (same) |
+| Models | 150+ (same) | 150+ (same) |
 | SLA | 99.9% uptime | Best-effort |
 | Speed | Priority queue | Standard queue |
 
@@ -46,14 +46,7 @@ Choose **Beta** for experimentation. Choose **Official** for production workload
 
 ## Available Tools
 
-Same 12 tools as the official version: `generate_image`, `generate_video`,
-`generate_music`, `list_models`, `estimate_cost`, `check_task`, `upload_file`,
-`list_files`, `delete_file`, `model_health`, `mcp_setup`, and `diagnose_request`.
-
-Paid generation tools require `confirm_cost=true`; one bounded retry may reuse
-the exact same durable idempotency key and cannot create a second paid intent.
-File operations use the same explicit upload-directory and confirmation controls
-as the official package.
+Same 10 tools as the official version: `search_models`, `get_model`, `estimate_cost`, `generate_image`, `generate_video`, `generate_audio`, `get_task`, `list_tasks`, `upload_file` and `check_balance`, with the same spending and safety behaviour (client confirmation for paid tools, optional `max_cost_usd`, idempotent submits, input checks before sending).
 
 ## License
 

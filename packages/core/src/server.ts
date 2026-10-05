@@ -1,43 +1,57 @@
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import type { ServerConfig } from './config.js';
-import { registerGenerateImage } from './tools/generate-image.js';
-import { registerGenerateVideo } from './tools/generate-video.js';
-import { registerGenerateMusic } from './tools/generate-music.js';
-import { registerListModels } from './tools/list-models.js';
+import { setProcessClientName } from './request-context.js';
+import { registerCheckBalance } from './tools/check-balance.js';
 import { registerEstimateCost } from './tools/estimate-cost.js';
-import { registerCheckTask } from './tools/check-task.js';
+import { registerGenerateTools } from './tools/generate.js';
+import { registerGetModel } from './tools/get-model.js';
+import { registerGetTask } from './tools/get-task.js';
+import { registerListTasks } from './tools/list-tasks.js';
+import { registerSearchModels } from './tools/search-models.js';
 import { registerUploadFile } from './tools/upload-file.js';
-import { registerDeleteFile } from './tools/delete-file.js';
-import { registerListFiles } from './tools/list-files.js';
-import { registerModelHealth } from './tools/model-health.js';
-import { registerMCPSetup } from './tools/mcp-setup.js';
-import { registerDiagnoseRequest } from './tools/diagnose-request.js';
+import { MCP_VERSION } from './version.js';
 
 export { type ServerConfig, createConfig, getApiKey } from './config.js';
 
 export interface ServerOptions {
   /** Allow upload_file to read local paths (stdio only); the hosted service sets false. */
   localFileUploads?: boolean;
+  /** Remember the client's name from initialize for X-Evo-Client-Name (stdio only; hosted requests carry their own). */
+  trackClientName?: boolean;
 }
 
-export function createServer(config: ServerConfig, options: ServerOptions = {}): McpServer {
-  const server = new McpServer({
-    name: config.channel === 'beta' ? 'evolink-mcp-beta' : 'evolink-mcp',
-    version: '1.3.0',
-  });
+/** Sent to the client at initialize; most assistants add it to their instructions. */
+export const SERVER_INSTRUCTIONS = [
+  'EvoLink creates images, videos, music and speech with 150+ models, billed to the user\'s EvoLink balance (68 credits ≈ $1).',
+  '- Find a model with search_models; read its parameters and prices with get_model.',
+  '- Before a paid generate_image, generate_video or generate_audio call, get the price with estimate_cost and tell the user; go ahead once they agree, or if they already approved this spend.',
+  '- generate_video and generate_audio return a task_id; wait for it with get_task (up to 45 s per call). Never call a generate tool again to check progress: that charges again.',
+  '- Result links expire after 24 hours; give them to the user right away.',
+  '- Errors include a next step (for example a top-up link); follow it instead of retrying blindly.',
+].join('\n');
 
-  registerGenerateImage(server, config);
-  registerGenerateVideo(server, config);
-  registerGenerateMusic(server, config);
-  registerListModels(server);
-  registerEstimateCost(server);
-  registerCheckTask(server, config);
+export function createServer(config: ServerConfig, options: ServerOptions = {}): McpServer {
+  const server = new McpServer(
+    {
+      name: config.channel === 'beta' ? 'evolink-mcp-beta' : 'evolink-mcp',
+      title: 'EvoLink',
+      version: MCP_VERSION,
+      websiteUrl: 'https://evolink.ai/mcp',
+    },
+    { instructions: SERVER_INSTRUCTIONS },
+  );
+  if (options.trackClientName ?? true) {
+    server.server.oninitialized = () => setProcessClientName(server.server.getClientVersion()?.name);
+  }
+
+  registerSearchModels(server);
+  registerGetModel(server);
+  registerEstimateCost(server, config);
+  registerGenerateTools(server, config);
+  registerGetTask(server, config);
+  registerListTasks(server, config);
   registerUploadFile(server, { localFiles: options.localFileUploads ?? true });
-  registerDeleteFile(server);
-  registerListFiles(server);
-  registerModelHealth(server);
-  registerMCPSetup(server);
-  registerDiagnoseRequest(server);
+  registerCheckBalance(server, config);
 
   return server;
 }

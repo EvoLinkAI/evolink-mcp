@@ -2,7 +2,7 @@
 
 **Generate AI videos, images & music with one API key.**
 
-One unified MCP server, 60+ AI models — Sora, Kling, Veo, Seedance, Suno, GPT Image, and more. Works with Claude Desktop, Claude Code, Cursor, Windsurf, and any MCP-compatible client.
+One unified MCP server, 150+ image, video and audio models — Seedance, Kling, Veo, Sora, Suno, GPT Image, Nano Banana and more. Works with Claude Desktop, Claude Code, Cursor, Windsurf, and any MCP-compatible client.
 
 [![npm](https://img.shields.io/npm/v/@evolinkai/mcp)](https://www.npmjs.com/package/@evolinkai/mcp)
 
@@ -88,83 +88,37 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 
 ## Tools
 
-| Tool | Description | Returns |
-|------|-------------|---------|
-| `generate_image` | Generate or edit AI images | task_id (async) |
-| `generate_video` | Generate AI videos | task_id (async) |
-| `generate_music` | Generate AI music & songs | task_id (async) |
-| `list_models` | Browse available models | model list |
-| `estimate_cost` | Calculate a workload-specific maximum using production SKU rules | estimate ID / amount / assumptions |
-| `diagnose_request` | Read account-scoped, redacted recovery facts for one request | findings / recovery actions |
-| `check_task` | Poll task progress & get results | status / result URLs |
-| `upload_file` | Upload explicitly confirmed media | file URL / file ID |
-| `list_files` | List files and quota | file list / quota |
-| `delete_file` | Permanently delete a confirmed file | deletion receipt |
-| `model_health` | Read canonical model availability | versioned health |
-| `mcp_setup` | Read secret-free setup facts | setup / warnings |
+| Tool | What it does | Cost |
+|------|--------------|------|
+| `search_models` | Find image, video and audio models by type and keywords, with a starting price | Free |
+| `get_model` | One model's parameters (required, allowed values, ranges, defaults), prices and an example input | Free |
+| `estimate_cost` | Check an input and estimate its cost before generating; also says whether the balance covers it | Free |
+| `generate_image` | Generate or edit images; waits up to 40 s and returns the links when ready | Paid |
+| `generate_video` | Generate a video; returns a `task_id` at once | Paid |
+| `generate_audio` | Generate music, songs or speech; returns a `task_id` at once | Paid |
+| `get_task` | Check a task and wait up to 45 s for it; returns result links (kept 24 h) and the final charge | Free |
+| `list_tasks` | Read up to 50 tasks at once, or find recent ones by status, type and time | Free |
+| `upload_file` | Turn an image, audio or video file into a link for generation input (kept 72 h) | Free |
+| `check_balance` | Account balance, what this key has spent, and the top-up link | Free |
 
-All generation tools are **async** — they return a `task_id` immediately. Use `check_task` to poll until completion.
+Pass model parameters in `input`, exactly as `get_model` lists them. Parameters come from the EvoLink docs: `scripts/build-model-params.mjs` converts the docs site's OpenAPI files into `packages/core/src/data/model-params.generated.ts`. Prices come from the public pricing list.
 
-## Safety controls
+## Spending and safety
 
-- `generate_image`, `generate_video`, and `generate_music` require
-  `confirm_cost=true`. One paid intent may make one bounded retry only with the
-  exact same idempotency key; GroAPI's durable ledger prevents a second dispatch
-  or charge. An unresolved outcome is reported without creating a new intent.
-- Read-only polling may retry `429`, `502`, or `503` and honors `Retry-After`.
-- `upload_file` requires `confirm_upload=true`. Local file access is disabled
-  unless `EVOLINK_UPLOAD_ALLOWED_DIRS` lists trusted absolute directories
-  (separated by `:` on macOS/Linux or `;` on Windows). Resolved paths, size,
-  extension, and content signatures are checked before streaming.
-- `delete_file` is marked destructive and requires `confirm_delete=true`.
-- Optional `EVOLINK_MCP_READ_TIMEOUT_MS` and `EVOLINK_MCP_WRITE_TIMEOUT_MS`
-  values must be between 1,000 and 600,000 milliseconds.
-- Router `delegate` requires `confirm_paid_request=true`. `cascade` defaults to
-  one paid step; multiple steps require an explicit cap and confirmation and
-  return aggregate token usage plus request IDs.
-- Model discovery, unit pricing, health, setup facts, execution validation, and
-  router protocol selection use the versioned GroAPI Canonical Catalog. A
-  five-minute in-process cache is used normally; stale or bundled fallback is
-  labeled explicitly and is never presented as current pricing.
-- `EVOLINK_API_KEY` remains backward compatible. New CLI-managed installs set
-  `EVOLINK_CREDENTIAL_HELPER` to an absolute `evolink` executable; the MCP
-  server invokes only `credential get` without a shell, so no key is serialized
-  in host configuration.
+- **No server-side approval.** Like most MCP providers, EvoLink relies on the client's confirmation prompt: the three generate tools are annotated `destructiveHint: true`, so clients ask before running them (a user may choose "always allow"); lookups are `readOnlyHint: true`. The server instructions and tool descriptions ask the assistant to quote the price with `estimate_cost` first.
+- **Optional cap.** `max_cost_usd` on the generate tools refuses to submit when the estimate is higher. Estimates are interim (published unit price × images or seconds, plus per-input-image charges); token-billed models cannot be capped in advance.
+- **No double charges.** Every submit carries an idempotency key (`client_request_id`, or a generated one), and a transport retry reuses it. After a network error or timeout the tool returns the key; repeating the call with the same `client_request_id` lets the gateway return the original task instead of charging again.
+- **Inputs are checked first.** Unknown parameter names (with "did you mean"), wrong types and values outside the documented choices or ranges are refused before anything is sent. `callback_url` is not available through MCP.
+- **Errors say what to do.** Gateway errors are classified by `error.code`: account balance, this key's total or daily limit, disabled or expired key, model not allowed, rate limit, idempotency conflict and so on, each with a next step and a full console link.
+- **No cancel tool.** Tasks run to completion; failed tasks are refunded.
+- Local file access for `upload_file` is disabled unless `EVOLINK_UPLOAD_ALLOWED_DIRS` lists trusted absolute directories (separated by `:` on macOS/Linux or `;` on Windows). Resolved paths, size, extension and content signatures are checked before streaming.
+- Optional `EVOLINK_MCP_READ_TIMEOUT_MS` and `EVOLINK_MCP_WRITE_TIMEOUT_MS` must be between 1,000 and 600,000 ms. A generation submit waits at most 30 s by default, so every tool call stays under the ~60 s limit of Codex and Cursor.
+- Router `delegate` requires `confirm_paid_request=true`. `cascade` defaults to one paid step; multiple steps require an explicit cap and confirmation and return aggregate token usage plus request IDs.
+- `EVOLINK_API_KEY` remains backward compatible. New CLI-managed installs set `EVOLINK_CREDENTIAL_HELPER` to an absolute `evolink` executable; the MCP server invokes only `credential get` without a shell, so no key is serialized in host configuration.
 
-## Supported Models
+## Models
 
-### Video (37 models)
-
-| Model | Best for |
-|-------|----------|
-| `seedance-1.5-pro` | Image-to-video, first-last-frame, auto audio |
-| `sora-2-preview` | Cinematic video preview |
-| `kling-o3-text-to-video` | Text-to-video, 1080p |
-| `veo-3.1-generate-preview` | Google video generation |
-| `MiniMax-Hailuo-2.3` | High-quality video |
-| `wan2.6-text-to-video` | Alibaba latest generation |
-| `sora-2` [BETA] | Cinematic, strong prompt adherence |
-| `veo3.1-pro` [BETA] | Top quality, cinematic + audio |
-
-### Image (19 models)
-
-| Model | Best for |
-|-------|----------|
-| `gpt-image-1.5` | Latest OpenAI generation |
-| `z-image-turbo` | Ultra-fast iterations |
-| `doubao-seedream-4.5` | Photorealistic |
-| `qwen-image-edit` | Instruction-based editing |
-| `gpt-4o-image` [BETA] | Best quality, complex editing |
-
-### Music (5 models, all [BETA])
-
-| Model | Quality |
-|-------|---------|
-| `suno-v4` | Good, 120s max |
-| `suno-v4.5` | Better, 240s max |
-| `suno-v5` | Studio-grade, 240s max |
-
-Use `list_models` to see the full catalog. For pricing, visit [evolink.ai/pricing](https://evolink.ai/models).
+Image, video and audio models from Google, OpenAI, ByteDance, Kuaishou, Alibaba, MiniMax, Suno and others (156 documented models in this release). Ask the assistant to run `search_models`, or browse [evolink.ai/models](https://evolink.ai/models).
 
 ## Two Editions
 

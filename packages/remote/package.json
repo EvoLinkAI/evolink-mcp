@@ -12,7 +12,7 @@
   "author": "EvoLink AI <support@evolink.ai>",
   "license": "Apache-2.0",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.12.1",
+    "@modelcontextprotocol/sdk": "^1.32.0",
     "zod": "^3.24.2"
   },
   "devDependencies": {
