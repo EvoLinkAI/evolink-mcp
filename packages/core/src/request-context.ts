@@ -56,6 +56,19 @@ export function processCredentialsAllowed(): boolean {
   return !processCredentialsDisabled;
 }
 
+/**
+ * How this request is billed: `signed_in` spends the account's internal MCP key
+ * through the service channel (its limit is the user's "EvoLink MCP limit");
+ * `api_key` is the hosted service with the caller's own API key; `local` is a
+ * stdio server with EVOLINK_API_KEY or the CLI login.
+ */
+export type CredentialMode = 'local' | 'api_key' | 'signed_in';
+
+export function currentCredentialMode(): CredentialMode {
+  if (storage.getStore()?.serviceChannel) return 'signed_in';
+  return processCredentialsDisabled ? 'api_key' : 'local';
+}
+
 /** stdio: remember the assistant name from the MCP initialize handshake. */
 export function setProcessClientName(name: string | undefined): void {
   processClientName = sanitizeClientName(name);

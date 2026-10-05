@@ -27,6 +27,16 @@ const CHANNEL_OUTCOMES = {
   sess_flaky: [503, 'agent_session_unavailable'],
   sess_setup: [500, 'mcp_connection_create_failed'],
   sess_banned: [403, 'user_disabled'],
+  // Money refusals for the account's MCP key: before the gateway knows (links to API Keys), after (limit_scope), and a pause.
+  sess_mcp_limit: [402, 'insufficient_token_quota', {
+    action_url: '/dashboard/keys', total_limit_credits: 680, used_credits: 680, remaining_credits: 0, estimated_credits: 6.8, account_balance_credits: 340,
+  }],
+  sess_mcp_scoped: [402, 'insufficient_token_quota', { limit_scope: 'mcp', action_url: '/dashboard/mcp' }],
+  sess_mcp_daily: [402, 'token_daily_quota_exceeded', {
+    action_url: '/dashboard/keys', daily_limit_credits: 68, daily_used_credits: 68, reset_timezone: 'Asia/Shanghai', account_balance_credits: 340,
+  }],
+  sess_paused: [403, 'mcp_paused', { action_url: '/dashboard/mcp' }],
+  sess_broke: [402, 'insufficient_quota', { action_url: '/dashboard/credits', account_balance_credits: 3.4, estimated_credits: 6.8 }],
 };
 
 const cleanups = [];
@@ -356,6 +366,51 @@ test('a token without a usable session is told to reconnect and nothing is sent'
   assert.ok(service.logs.some(event => event.channel_error === 'connection_identifiers'));
 });
 
+test('signed-in money refusals say whether the EvoLink MCP limit, a pause or the account balance stopped the call', async () => {
+  const service = await startService();
+  const expectations = [
+    ['sess_mcp_limit', 'mcp_limit_reached', /^EvoLink MCP spending limit reached\. This is the limit set for MCP, not your account balance\.\n/,
+      /Account balance: 340 credits \(≈\$5\.00\) \(not the problem\)\. Ask the user to raise or remove the EvoLink MCP limit at https:\/\/evolink\.ai\/dashboard;/],
+    ['sess_mcp_scoped', 'mcp_limit_reached', /^EvoLink MCP spending limit reached\./, /raise or remove the EvoLink MCP limit at https:\/\/evolink\.ai\/dashboard\/mcp;/],
+    ['sess_mcp_daily', 'mcp_daily_limit_reached', /^EvoLink MCP daily limit reached\. It resets at midnight; this is not your account balance\.\n/,
+      /midnight \(Asia\/Shanghai\)\. Account balance: 340 credits.*raise the EvoLink MCP daily limit at https:\/\/evolink\.ai\/dashboard\./],
+    ['sess_paused', 'mcp_paused', /^EvoLink MCP is paused for this account\. Resume it in the console; you do not need to reconnect\.\n/,
+      /resume EvoLink MCP at https:\/\/evolink\.ai\/dashboard\/mcp\. Do not ask them to reconnect/],
+    ['sess_broke', 'account_balance_insufficient', /^Your EvoLink account balance is too low for this request\. The balance is shared by API, web and MCP\.\n/,
+      /Balance: 3\.4 credits.*top up at https:\/\/evolink\.ai\/dashboard\/credits/],
+  ];
+  for (const [sid, category, headline, nextStep] of expectations) {
+    const client = await connect(service.url, signToken(signingKey, claims({ sid })));
+    const result = await client.callTool({ name: 'generate_image', arguments: { model: IMAGE_MODEL, prompt: `money ${sid}` } });
+    const text = result.content[0].text;
+    assert.equal(result.isError, true, sid);
+    assert.match(text, headline, sid);
+    assert.match(text, nextStep, sid);
+    assert.match(text, new RegExp(`\\nError: ${category}, `), sid);
+    assert.doesNotMatch(text, /dashboard\/keys|another key|rejected:/, `${sid}: a signed-in user is never sent to API Keys`);
+    assert.match(text, /Nothing was submitted or charged/, sid);
+    assert.equal(result.structuredContent.charged, 'no', sid);
+    assert.equal(result.structuredContent.error.category, category, sid);
+    assert.equal(result.structuredContent.error.headline, text.split('\n')[0], sid);
+    await client.close();
+  }
+});
+
+test('signed-in check_balance reports what EvoLink MCP has spent for every connected assistant', async () => {
+  const service = await startService();
+  const client = await connect(service.url, signToken(signingKey, claims()));
+  const result = await client.callTool({ name: 'check_balance', arguments: {} });
+  assert.notEqual(result.isError, true, JSON.stringify(result));
+  const text = result.content[0].text;
+  assert.match(text, /Account balance: 340 credits/);
+  assert.match(text, /EvoLink MCP \(all assistants connected to this account\) has spent 48 credits \(≈\$0\.706\); 20 credits \(≈\$0\.294\) of the EvoLink MCP limit is left\./);
+  assert.match(text, /nearly used up \(it is a limit, not the account balance\)/);
+  assert.equal(result.structuredContent.spent_scope, 'mcp');
+  const call = gateway.calls.findLast(item => item.path === '/v1/credits');
+  assert.equal(call.authorization, `Bearer ${SERVICE_TOKEN}`, 'billed through the service channel');
+  await client.close();
+});
+
 test('service channel rejections give the right next step and nothing is charged', async () => {
   const service = await startService();
   const expectations = [
@@ -378,12 +433,14 @@ test('service channel rejections give the right next step and nothing is charged
     await client.close();
   }
 
-  // A key the user disabled in the console reads as a connection problem, not "check EVOLINK_API_KEY".
+  // The account's MCP key is only disabled by "pause all": that reads as a paused EvoLink MCP,
+  // not a connection to redo and not "check EVOLINK_API_KEY".
   const disabledClient = await connect(service.url, signToken(signingKey, claims({ sid: 'sess_disabled' })));
   const disabled = await disabledClient.callTool({ name: 'generate_image', arguments: { model: IMAGE_MODEL, prompt: 'disabled-key cat' } });
   assert.equal(disabled.isError, true);
-  assert.match(disabled.content[0].text, /key_disabled/);
-  assert.match(disabled.content[0].text, /Ask the user to reconnect EvoLink in this client/, 'hosted wording, not "check EVOLINK_API_KEY"');
+  assert.match(disabled.content[0].text, /^EvoLink MCP is paused for this account\. Resume it in the console; you do not need to reconnect\./);
+  assert.match(disabled.content[0].text, /Error: mcp_paused, KEY_DISABLED, HTTP 401/);
+  assert.doesNotMatch(disabled.content[0].text, /reconnect EvoLink in this client|EVOLINK_API_KEY/);
   assert.match(disabled.content[0].text, /Nothing was submitted or charged/);
   await disabledClient.close();
 
@@ -525,11 +582,11 @@ async function startGateway() {
     });
     // The MCP service channel (key custody A), checked the way the gateway's A entry does.
     if ((req.headers.authorization ?? '').startsWith('Bearer evmcp_')) {
-      const reject = (status, code) => send(status, { error: { code, type: 'authentication_error', message: `rejected: ${code}` } });
+      const reject = (status, code, extra = {}) => send(status, { error: { code, type: 'authentication_error', message: `rejected: ${code}`, ...extra } });
       if (req.headers.authorization !== `Bearer ${SERVICE_TOKEN}`) return reject(401, 'mcp_service_unauthorized');
       if (!session || !subject) return reject(400, 'mcp_connection_required');
       const outcome = CHANNEL_OUTCOMES[session];
-      if (outcome) return reject(outcome[0], outcome[1]);
+      if (outcome) return reject(outcome[0], outcome[1], outcome[2]);
     }
     if (req.method === 'POST' && req.url === '/v1/images/generations') {
       if ((body?.prompt ?? '').includes('disabled-key')) {
@@ -538,6 +595,12 @@ async function startGateway() {
       const wait = Number(/wait=(\d+)/.exec(body?.prompt ?? '')?.[1] ?? 0);
       if (wait) await delay(wait);
       return send(200, { id: `task_${calls.length}`, status: 'pending', model: body?.model, type: 'image', progress: 0, task_info: { estimated_time: 5 } }, { 'x-request-id': 'req_gateway' });
+    }
+    if (req.method === 'GET' && req.url === '/v1/credits') {
+      return send(200, { success: true, data: {
+        user: { remaining_credits: 340, used_credits: 12 },
+        token: { remaining_credits: 20, used_credits: 48, unlimited_credits: false },
+      } });
     }
     if (req.method === 'GET' && req.url.startsWith('/v1/tasks/')) {
       const id = decodeURIComponent(req.url.slice('/v1/tasks/'.length));

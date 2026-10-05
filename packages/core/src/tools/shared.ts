@@ -74,7 +74,9 @@ function infoFor(error: unknown): GatewayErrorInfo {
 /** Converts a thrown error into a tool error with a category and a concrete next step. */
 export function errorResult(error: unknown, context: ErrorContext = {}): CallToolResult {
   const info = infoFor(error);
-  const lines = [`Error (${info.category}${info.code ? `, ${info.code}` : ''}${info.status ? `, HTTP ${info.status}` : ''}): ${info.message}`];
+  const label = `${info.category}${info.code ? `, ${info.code}` : ''}${info.status ? `, HTTP ${info.status}` : ''}`;
+  // A headline names the limit in plain words first, so every client shows the user which one stopped the call.
+  const lines = info.headline ? [info.headline] : [`Error (${label}): ${info.message}`];
   lines.push(`Next step: ${info.next_step}`);
   let charged: 'no' | 'unknown' | undefined;
   if (context.paid) {
@@ -88,6 +90,7 @@ export function errorResult(error: unknown, context: ErrorContext = {}): CallToo
       lines.push('Nothing was submitted or charged.');
     }
   }
+  if (info.headline) lines.push(`Error: ${label}`);
   if (info.request_id) lines.push(`Request ID: ${info.request_id}`);
   return failure(lines.join('\n'), {
     error: info,

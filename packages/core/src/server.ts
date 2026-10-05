@@ -33,6 +33,7 @@ export const SERVER_INSTRUCTIONS = [
   '- generate_video and generate_audio return a task_id; wait for it with get_task (up to 45 s per call). Never call a generate tool again to check progress: that charges again.',
   '- Result links expire after 24 hours; give them to the user right away.',
   '- Errors include a next step (for example a top-up link); follow it instead of retrying blindly.',
+  '- When a call is refused for money, tell the user which reason the error names: the EvoLink MCP limit (or daily limit) they set, EvoLink MCP being paused, or the account balance. They need different fixes, so never call an MCP limit a low balance; give the link from the error and do not retry until the user has acted.',
 ].join('\n');
 
 export function createServer(config: ServerConfig, options: ServerOptions = {}): McpServer {

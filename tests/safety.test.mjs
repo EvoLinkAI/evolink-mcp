@@ -22,6 +22,7 @@ import { closestMatches, validateInput } from '../packages/evolink-media/dist/co
 import { estimateCost, resetPricingCacheForTests, skuPrice } from '../packages/evolink-media/dist/core/src/services/pricing-client.js';
 import { allModelParams, findModelParams } from '../packages/evolink-media/dist/core/src/data/model-params.js';
 import { createServer } from '../packages/evolink-media/dist/core/src/server.js';
+import { runWithRequestCredentials } from '../packages/evolink-media/dist/core/src/request-context.js';
 import { setPollIntervalForTests } from '../packages/evolink-media/dist/core/src/tools/task-format.js';
 import { parseSince } from '../packages/evolink-media/dist/core/src/tools/list-tasks.js';
 import {
@@ -36,6 +37,8 @@ const originalFetch = globalThis.fetch;
 const originalKey = process.env.EVOLINK_API_KEY;
 const originalControlBase = process.env.EVOLINK_CONTROL_BASE;
 const CONFIG = { channel: 'official', baseUrl: 'https://api.example' };
+/** A signed-in connection (key custody A): calls go through the service channel and spend the account's MCP key. */
+const SIGNED_IN = { serviceChannel: { serviceToken: `evmcp_${'t'.repeat(40)}`, sessionId: 'sess_safety', subject: 'usr_safety' } };
 
 const TOOL_NAMES = [
   'check_balance', 'estimate_cost', 'generate_audio', 'generate_image', 'generate_video',
@@ -270,6 +273,7 @@ test('gateway errors are classified by code first, with absolute console links a
     [401, 'mcp_service_unauthorized', 'service_misconfigured', undefined],
     [400, 'mcp_connection_required', 'service_misconfigured', undefined],
     [403, 'user_disabled', 'account_disabled', undefined],
+    [403, 'mcp_paused', 'mcp_paused', 'https://evolink.ai/dashboard'],
   ];
   for (const [status, code, category, actionUrl] of cases) {
     const info = classifyGatewayError(status, { error: { code, message: `m (request id: req_1)` } }, 5_000, 'req_header');
@@ -304,6 +308,49 @@ test('gateway errors are classified by code first, with absolute console links a
   assert.match(classifyGatewayError(503, { error: { code: 'agent_session_unavailable' } }).next_step, /do not reconnect/);
   assert.match(classifyGatewayError(401, { error: { code: 'session_inactive' } }).next_step, /reconnect the existing EvoLink connection/);
 
+  // Money refusals open with one plain sentence naming the reason; other errors keep the gateway's message.
+  assert.match(classifyGatewayError(402, { error: { code: 'insufficient_quota' } }).headline, /^Your EvoLink account balance is too low for this request\. The balance is shared by API, web and MCP\.$/);
+  assert.match(classifyGatewayError(402, { error: { code: 'insufficient_token_quota' } }).headline, /^This API key's spending limit is used up\. This is the key's own limit, not your account balance\.$/);
+  assert.match(classifyGatewayError(402, { error: { code: 'token_daily_quota_exceeded' } }).headline, /^This API key's daily limit is used up/);
+  assert.equal(classifyGatewayError(500, { error: { code: 'internal_error' } }).headline, undefined);
+  assert.equal('headline' in classifyGatewayError(429, {}), false);
+
+  // The gateway marks the account's MCP key limits with limit_scope "mcp"; its link then wins.
+  const scoped = classifyGatewayError(402, { error: {
+    code: 'insufficient_token_quota', limit_scope: 'mcp', action_url: '/dashboard/mcp',
+    total_limit_credits: 680, used_credits: 676.6, remaining_credits: 3.4, estimated_credits: 13.6, account_balance_credits: 340,
+  } });
+  assert.equal(scoped.category, 'mcp_limit_reached');
+  assert.equal(scoped.action_url, 'https://evolink.ai/dashboard/mcp');
+  assert.equal(scoped.headline, 'EvoLink MCP spending limit reached. This is the limit set for MCP, not your account balance.');
+  assert.match(scoped.next_step, /^EvoLink MCP limit: 680 credits \(≈\$10\.00\); used: 676\.6 credits/);
+  assert.match(scoped.next_step, /left: 3\.4 credits/);
+  assert.match(scoped.next_step, /Account balance: 340 credits \(≈\$5\.00\) \(not the problem\)/);
+  assert.match(scoped.next_step, /raise or remove the EvoLink MCP limit at https:\/\/evolink\.ai\/dashboard\/mcp; it is shared by every assistant/);
+  assert.equal(scoped.retryable, false);
+  const scopedDaily = classifyGatewayError(402, { error: { code: 'token_daily_quota_exceeded', limit_scope: 'MCP', reset_timezone: 'UTC', daily_limit_credits: 68, daily_used_credits: 68 } });
+  assert.equal(scopedDaily.category, 'mcp_daily_limit_reached');
+  assert.equal(scopedDaily.retryable, true);
+  assert.match(scopedDaily.next_step, /^Today's EvoLink MCP spending: 68 credits \(≈\$1\.00\) of the 68 credits \(≈\$1\.00\) daily limit\. It resets automatically at midnight \(UTC\)/);
+  const paused = classifyGatewayError(403, { error: { code: 'mcp_paused', action_url: '/dashboard/mcp' } });
+  assert.equal(paused.action_url, 'https://evolink.ai/dashboard/mcp');
+  assert.equal(paused.retryable, false);
+  assert.match(paused.next_step, /^Ask the user to resume EvoLink MCP at https:\/\/evolink\.ai\/dashboard\/mcp\. Do not ask them to reconnect/);
+
+  // A signed-in connection spends the account's MCP key: its key limits are the MCP limit even before the gateway says so,
+  // and the API Keys page the old gateway links to does not list that key.
+  runWithRequestCredentials(SIGNED_IN, () => {
+    const limit = classifyGatewayError(402, { error: { code: 'insufficient_token_quota', action_url: '/dashboard/keys' } });
+    assert.equal(limit.category, 'mcp_limit_reached');
+    assert.equal(limit.action_url, 'https://evolink.ai/dashboard');
+    assert.doesNotMatch(limit.next_step, /dashboard\/keys|another key/);
+    assert.equal(classifyGatewayError(402, { error: { code: 'token_daily_quota_exceeded', action_url: '/dashboard/keys' } }).action_url, 'https://evolink.ai/dashboard');
+    assert.equal(classifyGatewayError(401, { error: { code: 'KEY_DISABLED' } }).category, 'mcp_paused');
+    assert.equal(classifyGatewayError(402, { error: { code: 'insufficient_quota' } }).category, 'account_balance_insufficient');
+    assert.match(classifyGatewayError(401, {}).next_step, /reconnect EvoLink in this client/);
+    assert.match(classifyGatewayError(401, { error: { code: 'KEY_EXPIRED' } }).next_step, /connection has expired/);
+  });
+
   const files = classifyGatewayError(400, { success: false, code: 400, msg: 'file too large' });
   assert.equal(files.message, 'file too large');
   const oauth = classifyGatewayError(401, { error: 'invalid_token', error_description: 'expired' });
@@ -318,13 +365,15 @@ test('error classification never throws and always gives a next step (seeded fuz
     'model_not_allowed', 'unauthorized', 'forbidden', 'rate_limited', 'invalid_request', 'not_found', 'content_policy',
     'model_unavailable', 'idempotency_conflict', 'outcome_unknown', 'request_too_large', 'server_error',
     'connection_ended', 'session_check_unavailable', 'connection_setup_failed', 'service_misconfigured', 'account_disabled',
+    'mcp_limit_reached', 'mcp_daily_limit_reached', 'mcp_paused',
   ]);
   const codes = [
     undefined, '', 'insufficient_quota', 'KEY_EXPIRED', 'channel:no_available_key', 'paid_outcome_unknown',
     'session_inactive', 'agent_session_unavailable', 'mcp_service_unauthorized', 'user_disabled', 'x'.repeat(300), 42, null, {},
+    'insufficient_token_quota', 'token_daily_quota_exceeded', 'mcp_paused', 'KEY_DISABLED',
   ];
   const bodies = [
-    () => ({ error: { code: codes[Math.floor(random() * codes.length)], message: 'x'.repeat(Math.floor(random() * 2000)), account_balance_credits: random() > 0.5 ? random() * 100 : 'n/a' } }),
+    () => ({ error: { code: codes[Math.floor(random() * codes.length)], message: 'x'.repeat(Math.floor(random() * 2000)), account_balance_credits: random() > 0.5 ? random() * 100 : 'n/a', limit_scope: random() > 0.7 ? 'mcp' : undefined, action_url: random() > 0.5 ? '/dashboard/x' : '//evil.example' } }),
     () => ({ success: false, code: Math.floor(random() * 600), msg: 'files' }),
     () => ({ error: 'oops' }),
     () => 'plain text',
@@ -334,12 +383,14 @@ test('error classification never throws and always gives a next step (seeded fuz
   for (let i = 0; i < 2_000; i++) {
     const status = 400 + Math.floor(random() * 200);
     const body = bodies[Math.floor(random() * bodies.length)]();
-    const info = classifyGatewayError(status, body, random() > 0.5 ? Math.floor(random() * 60_000) : undefined);
+    const classify = () => classifyGatewayError(status, body, random() > 0.5 ? Math.floor(random() * 60_000) : undefined);
+    const info = random() > 0.5 ? runWithRequestCredentials(SIGNED_IN, classify) : classify();
     assert.ok(categories.has(info.category), info.category);
     assert.ok(info.next_step.length > 0);
     assert.ok(info.message.length <= 600);
     assert.equal(typeof info.retryable, 'boolean');
     if (info.action_url) assert.match(info.action_url, /^https:\/\/evolink\.ai\//);
+    if (info.category.startsWith('mcp_')) assert.ok(info.headline?.startsWith('EvoLink MCP'), info.category);
   }
 });
 
@@ -809,13 +860,64 @@ test('check_balance shows the balance, the key spend and the top-up link', async
     assert.match(textOf(unlimited), /no spending limit of its own/);
     assert.match(textOf(unlimited), /https:\/\/evolink\.ai\/dashboard\/credits/);
     assert.equal(unlimited.structuredContent.has_limit, false);
+    assert.equal(unlimited.structuredContent.spent_scope, 'api_key');
 
     token = { remaining_credits: 20, used_credits: 48, unlimited_credits: false };
     user = { remaining_credits: -3, used_credits: 900 };
     const limited = await client.callTool({ name: 'check_balance', arguments: {} });
     assert.match(textOf(limited), /Account balance: 0 credits/);
     assert.match(textOf(limited), /20 credits \(≈\$0\.294\) of its limit is left/);
+    assert.match(textOf(limited), /This API key's limit is nearly used up; raise it at https:\/\/evolink\.ai\/dashboard\/keys/);
     assert.match(textOf(limited), /balance is low/);
+
+    // Signed in: the spend and the limit are EvoLink MCP's, shared by every connected assistant.
+    user = { remaining_credits: 340, used_credits: 12 };
+    const signedIn = await runWithRequestCredentials(SIGNED_IN, () => client.callTool({ name: 'check_balance', arguments: {} }));
+    assert.notEqual(signedIn.isError, true, JSON.stringify(signedIn));
+    assert.match(textOf(signedIn), /EvoLink MCP \(all assistants connected to this account\) has spent 48 credits \(≈\$0\.706\); 20 credits \(≈\$0\.294\) of the EvoLink MCP limit is left\./);
+    assert.match(textOf(signedIn), /nearly used up \(it is a limit, not the account balance\); the user can raise it at https:\/\/evolink\.ai\/dashboard\./);
+    assert.doesNotMatch(textOf(signedIn), /This API key|balance is low/);
+    assert.equal(signedIn.structuredContent.spent_scope, 'mcp');
+    assert.equal(signedIn.structuredContent.mcp_settings_url, 'https://evolink.ai/dashboard');
+    token = { remaining_credits: 99999.9999, used_credits: 6.8, unlimited_credits: true };
+    const noLimit = await runWithRequestCredentials(SIGNED_IN, () => client.callTool({ name: 'check_balance', arguments: {} }));
+    assert.match(textOf(noLimit), /no EvoLink MCP limit is set, so only the account balance applies/);
+  } finally {
+    await close();
+  }
+});
+
+test('estimate_cost warns before a spending limit refuses the call, and names which limit', async () => {
+  let token = { remaining_credits: 2, used_credits: 678, unlimited_credits: false };
+  installGateway(baseRoutes({
+    'GET /v1/credits': () => json(200, { success: true, data: { user: { remaining_credits: 340, used_credits: 12 }, token } }),
+  }));
+  const { client, close } = await connect();
+  const args = { model: IMAGE_MODEL, input: validImageInput() };
+  try {
+    const local = await client.callTool({ name: 'estimate_cost', arguments: args });
+    assert.match(textOf(local), /This API key's limit left: 2 credits/);
+    assert.match(textOf(local), /This API key's limit may not cover this; raise it at https:\/\/evolink\.ai\/dashboard\/keys or use another key\./);
+    assert.equal(local.structuredContent.limit_scope, 'api_key');
+    assert.equal(local.structuredContent.enough_limit, false);
+    assert.equal(local.structuredContent.enough_balance, true);
+
+    const signedIn = await runWithRequestCredentials(SIGNED_IN, () => client.callTool({ name: 'estimate_cost', arguments: args }));
+    assert.match(textOf(signedIn), /EvoLink MCP limit left: 2 credits \(≈\$0\.029\) \(shared by all connected assistants\)\./);
+    assert.match(textOf(signedIn), /The EvoLink MCP limit may not cover this\. It is a limit the user set, not the account balance; they can raise it at https:\/\/evolink\.ai\/dashboard\./);
+    assert.doesNotMatch(textOf(signedIn), /This API key|top up/);
+    assert.equal(signedIn.structuredContent.limit_scope, 'mcp');
+    assert.equal(signedIn.structuredContent.enough_limit, false);
+
+    token = { remaining_credits: 500, used_credits: 180, unlimited_credits: false };
+    const roomy = await runWithRequestCredentials(SIGNED_IN, () => client.callTool({ name: 'estimate_cost', arguments: args }));
+    assert.equal(roomy.structuredContent.enough_limit, true);
+    assert.doesNotMatch(textOf(roomy), /may not cover/);
+
+    token = { remaining_credits: 99999.9999, used_credits: 6.8, unlimited_credits: true };
+    const unlimited = await client.callTool({ name: 'estimate_cost', arguments: args });
+    assert.equal('limit_scope' in unlimited.structuredContent, false);
+    assert.doesNotMatch(textOf(unlimited), /limit left/);
   } finally {
     await close();
   }

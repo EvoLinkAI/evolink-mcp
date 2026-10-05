@@ -12,6 +12,12 @@ export const MAX_RETRY_DELAY_MS = 30_000;
 export const EVOLINK_SITE = 'https://evolink.ai';
 export const TOP_UP_URL = `${EVOLINK_SITE}/dashboard/credits`;
 export const API_KEYS_URL = `${EVOLINK_SITE}/dashboard/keys`;
+/**
+ * Where a signed-in user manages the EvoLink MCP limit and pause. The console has
+ * no MCP section yet, so this is the dashboard; once the gateway marks a limit
+ * answer with limit_scope "mcp", its action_url takes precedence.
+ */
+export const MCP_CONSOLE_URL = `${EVOLINK_SITE}/dashboard`;
 
 /** The gateway accepts Idempotency-Key values of 16–96 characters from this set. */
 export const CLIENT_REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{16,96}$/;

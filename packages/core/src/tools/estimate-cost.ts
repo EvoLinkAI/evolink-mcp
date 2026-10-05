@@ -5,7 +5,8 @@ import { getCredits } from '../services/api-client.js';
 import { resolveModel, suggestModels } from '../services/model-catalog.js';
 import { formatIssues, validateInput, type ValidationResult } from '../services/param-validator.js';
 import { estimateCost, formatEstimateRange } from '../services/pricing-client.js';
-import { TOP_UP_URL } from '../services/http-policy.js';
+import { API_KEYS_URL, MCP_CONSOLE_URL, TOP_UP_URL } from '../services/http-policy.js';
+import { currentCredentialMode } from '../request-context.js';
 import { READ_ONLY, errorResult, failure, money, ok } from './shared.js';
 
 export function registerEstimateCost(server: McpServer, config: ServerConfig): void {
@@ -13,7 +14,7 @@ export function registerEstimateCost(server: McpServer, config: ServerConfig): v
     title: 'Estimate cost',
     description: [
       'Check a generation input and estimate what it will cost, without submitting anything. Free.',
-      'Returns whether the input is valid, the expected price range in USD and credits, what it is based on, and whether the balance covers it.',
+      'Returns whether the input is valid, the expected price range in USD and credits, what it is based on, and whether the account balance and any spending limit (the EvoLink MCP limit, or this API key\'s) cover it.',
       'Call it before a paid generate_* call and tell the user the price.',
     ].join(' '),
     inputSchema: {
@@ -71,7 +72,26 @@ export function registerEstimateCost(server: McpServer, config: ServerConfig): v
         if (estimate.max_credits !== undefined) {
           const enough = balance >= estimate.max_credits;
           structured.enough_balance = enough;
-          if (!enough) lines.push(`The balance may not cover this; top up at ${TOP_UP_URL}.`);
+          if (!enough) lines.push(`The account balance may not cover this; top up at ${TOP_UP_URL}.`);
+        }
+        // The key's own limit is checked before the balance: warn now instead of failing on submit.
+        if (!credits.token.unlimited_credits) {
+          const signedIn = currentCredentialMode() === 'signed_in';
+          const left = Math.max(0, credits.token.remaining_credits);
+          lines.push(signedIn
+            ? `EvoLink MCP limit left: ${money(left)} (shared by all connected assistants).`
+            : `This API key's limit left: ${money(left)}.`);
+          structured.limit_scope = signedIn ? 'mcp' : 'api_key';
+          structured.limit_remaining_credits = left;
+          if (estimate.max_credits !== undefined) {
+            const enoughLimit = left >= estimate.max_credits;
+            structured.enough_limit = enoughLimit;
+            if (!enoughLimit) {
+              lines.push(signedIn
+                ? `The EvoLink MCP limit may not cover this. It is a limit the user set, not the account balance; they can raise it at ${MCP_CONSOLE_URL}.`
+                : `This API key's limit may not cover this; raise it at ${API_KEYS_URL} or use another key.`);
+            }
+          }
         }
       } catch {
         lines.push('Balance: could not be read right now.');

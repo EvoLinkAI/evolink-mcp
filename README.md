@@ -92,14 +92,14 @@ Add to `~/.codeium/windsurf/mcp_config.json`:
 |------|--------------|------|
 | `search_models` | Find image, video and audio models by type and keywords, with a starting price | Free |
 | `get_model` | One model's parameters (required, allowed values, ranges, defaults), prices and an example input | Free |
-| `estimate_cost` | Check an input and estimate its cost before generating; also says whether the balance covers it | Free |
+| `estimate_cost` | Check an input and estimate its cost before generating; also says whether the balance and any spending limit (the EvoLink MCP limit, or this key's) cover it | Free |
 | `generate_image` | Generate or edit images; waits up to 40 s and returns the links when ready | Paid |
 | `generate_video` | Generate a video; returns a `task_id` at once | Paid |
 | `generate_audio` | Generate music, songs or speech; returns a `task_id` at once | Paid |
 | `get_task` | Check a task and wait up to 45 s for it; returns result links (kept 24 h) and the final charge | Free |
 | `list_tasks` | Read up to 50 tasks at once, or find recent ones by status, type and time | Free |
 | `upload_file` | Turn an image, audio or video file into a link for generation input (kept 72 h) | Free |
-| `check_balance` | Account balance, what this key has spent, and the top-up link | Free |
+| `check_balance` | Account balance, what EvoLink MCP (signed in, all assistants) or this key has spent and its limit, and the top-up link | Free |
 
 Pass model parameters in `input`, exactly as `get_model` lists them. Parameters come from the EvoLink docs: `scripts/build-model-params.mjs` converts the docs site's OpenAPI files into `packages/core/src/data/model-params.generated.ts`. Prices come from the public pricing list.
 
@@ -109,7 +109,7 @@ Pass model parameters in `input`, exactly as `get_model` lists them. Parameters 
 - **Optional cap.** `max_cost_usd` on the generate tools refuses to submit when the estimate is higher. Estimates are interim (published unit price × images or seconds, plus per-input-image charges); token-billed models cannot be capped in advance.
 - **No double charges.** Every submit carries an idempotency key (`client_request_id`, or a generated one), and a transport retry reuses it. After a network error or timeout the tool returns the key; repeating the call with the same `client_request_id` lets the gateway return the original task instead of charging again.
 - **Inputs are checked first.** Unknown parameter names (with "did you mean"), wrong types and values outside the documented choices or ranges are refused before anything is sent. `callback_url` is not available through MCP.
-- **Errors say what to do.** Gateway errors are classified by `error.code`: account balance, this key's total or daily limit, disabled or expired key, model not allowed, rate limit, idempotency conflict and so on, each with a next step and a full console link.
+- **Errors say what to do.** Gateway errors are classified by `error.code`: account balance, the EvoLink MCP limit or daily limit and a paused EvoLink MCP (signed-in connections), this key's total or daily limit, disabled or expired key, model not allowed, rate limit, idempotency conflict and so on, each with a next step and a full console link. Money refusals start with one plain sentence naming the reason (for example "EvoLink MCP spending limit reached. This is the limit set for MCP, not your account balance."), so every client can tell a limit from an empty account.
 - **No cancel tool.** Tasks run to completion; failed tasks are refunded.
 - Local file access for `upload_file` is disabled unless `EVOLINK_UPLOAD_ALLOWED_DIRS` lists trusted absolute directories (separated by `:` on macOS/Linux or `;` on Windows). Resolved paths, size, extension and content signatures are checked before streaming.
 - Optional `EVOLINK_MCP_READ_TIMEOUT_MS` and `EVOLINK_MCP_WRITE_TIMEOUT_MS` must be between 1,000 and 600,000 ms. A generation submit waits at most 30 s by default, so every tool call stays under the ~60 s limit of Codex and Cursor.

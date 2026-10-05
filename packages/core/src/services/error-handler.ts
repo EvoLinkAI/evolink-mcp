@@ -1,5 +1,5 @@
-import { processCredentialsAllowed } from '../request-context.js';
-import { API_KEYS_URL, TOP_UP_URL, siteUrl } from './http-policy.js';
+import { currentCredentialMode, type CredentialMode } from '../request-context.js';
+import { API_KEYS_URL, MCP_CONSOLE_URL, TOP_UP_URL, siteUrl } from './http-policy.js';
 
 // --- HTTP-level errors (non-2xx gateway responses) ---
 
@@ -7,9 +7,15 @@ import { API_KEYS_URL, TOP_UP_URL, siteUrl } from './http-policy.js';
  * What the assistant should do about a rejection. The gateway already tells
  * the three quota cases apart by error.code (all are HTTP 402 with the same
  * error.type), so classification goes by code first and status second.
+ *
+ * A signed-in connection spends the account's internal MCP key, so its key
+ * limits are the user's "EvoLink MCP limit" (mcp_*), never an API key's.
  */
 export type ErrorCategory =
   | 'account_balance_insufficient'
+  | 'mcp_limit_reached'
+  | 'mcp_daily_limit_reached'
+  | 'mcp_paused'
   | 'key_quota_exhausted'
   | 'key_daily_quota_exhausted'
   | 'key_disabled'
@@ -35,6 +41,12 @@ export type ErrorCategory =
 export interface GatewayErrorInfo {
   status: number;
   category: ErrorCategory;
+  /**
+   * First sentence for the user when a limit, the balance or the connection
+   * stopped the request. It names which one, so every client can tell an
+   * EvoLink MCP limit from an empty account.
+   */
+  headline?: string;
   code?: string;
   message: string;
   next_step: string;
@@ -98,12 +110,18 @@ function text(value: unknown): string | undefined {
   return undefined;
 }
 
-function categorize(status: number, code: string): ErrorCategory {
+/**
+ * @param mcpLimits the key limits are the account's EvoLink MCP limit: a
+ *   signed-in connection, or the gateway said so with limit_scope "mcp".
+ */
+function categorize(status: number, code: string, mode: CredentialMode, mcpLimits: boolean): ErrorCategory {
   const lower = code.toLowerCase();
   if (ACCOUNT_CODES.has(lower)) return 'account_balance_insufficient';
-  if (KEY_QUOTA_CODES.has(lower)) return 'key_quota_exhausted';
-  if (KEY_DAILY_CODES.has(lower)) return 'key_daily_quota_exhausted';
-  if (lower === 'key_disabled') return 'key_disabled';
+  if (KEY_QUOTA_CODES.has(lower)) return mcpLimits ? 'mcp_limit_reached' : 'key_quota_exhausted';
+  if (KEY_DAILY_CODES.has(lower)) return mcpLimits ? 'mcp_daily_limit_reached' : 'key_daily_quota_exhausted';
+  if (lower === 'mcp_paused') return 'mcp_paused';
+  // The account's MCP key is only ever disabled by "pause all" in the console.
+  if (lower === 'key_disabled') return mode === 'signed_in' ? 'mcp_paused' : 'key_disabled';
   if (lower === 'key_expired') return 'key_expired';
   if (lower === 'key_model_not_allowed') return 'model_not_allowed';
   if (lower === 'idempotency_conflict') return 'idempotency_conflict';
@@ -130,12 +148,19 @@ function categorize(status: number, code: string): ErrorCategory {
 
 const RETRYABLE: ReadonlySet<ErrorCategory> = new Set<ErrorCategory>([
   'key_daily_quota_exhausted',
+  'mcp_daily_limit_reached',
   'rate_limited',
   'model_unavailable',
   'outcome_unknown',
   'server_error',
   'session_check_unavailable',
   'connection_setup_failed',
+]);
+
+/** Answers about the account's EvoLink MCP limit; their console link is the MCP settings, not API Keys. */
+const MCP_LIMIT_CATEGORIES: ReadonlySet<ErrorCategory> = new Set<ErrorCategory>(['mcp_limit_reached', 'mcp_daily_limit_reached', 'mcp_paused']);
+const KEY_CATEGORIES: ReadonlySet<ErrorCategory> = new Set<ErrorCategory>([
+  'key_quota_exhausted', 'key_daily_quota_exhausted', 'key_disabled', 'key_expired', 'model_not_allowed',
 ]);
 
 function credits(value: unknown): string | undefined {
@@ -154,31 +179,90 @@ export function formatUsd(value: number): string {
   return Number(value.toPrecision(2)).toString();
 }
 
-function nextStep(category: ErrorCategory, info: GatewayErrorInfo): string {
-  const hosted = !processCredentialsAllowed();
+/** Sentences naming which limit stopped the request; the same words in every client. */
+function headlineFor(category: ErrorCategory): string | undefined {
+  switch (category) {
+    case 'mcp_limit_reached':
+      return 'EvoLink MCP spending limit reached. This is the limit set for MCP, not your account balance.';
+    case 'mcp_daily_limit_reached':
+      return 'EvoLink MCP daily limit reached. It resets at midnight; this is not your account balance.';
+    case 'mcp_paused':
+      return 'EvoLink MCP is paused for this account. Resume it in the console; you do not need to reconnect.';
+    case 'account_balance_insufficient':
+      return 'Your EvoLink account balance is too low for this request. The balance is shared by API, web and MCP.';
+    case 'key_quota_exhausted':
+      return 'This API key\'s spending limit is used up. This is the key\'s own limit, not your account balance.';
+    case 'key_daily_quota_exhausted':
+      return 'This API key\'s daily limit is used up. It resets at midnight; this is not your account balance.';
+    case 'connection_ended':
+      return 'This EvoLink connection was disconnected. Reconnect EvoLink in this client.';
+    default:
+      return undefined;
+  }
+}
+
+/** "Limit: …; used: …; left: …." from whatever figures the gateway attached. */
+function limitFigures(details: Record<string, unknown>, label: string): string {
+  const parts = [
+    credits(details.total_limit_credits) && `${label}: ${credits(details.total_limit_credits)}`,
+    credits(details.used_credits) && `used: ${credits(details.used_credits)}`,
+    credits(details.remaining_credits) && `left: ${credits(details.remaining_credits)}`,
+  ].filter(Boolean);
+  return parts.length ? `${parts.join('; ')}.` : '';
+}
+
+function sentences(...parts: Array<string | undefined | false>): string {
+  return parts.filter(Boolean).join(' ');
+}
+
+function nextStep(category: ErrorCategory, info: GatewayErrorInfo, mode: CredentialMode): string {
   const details = info.details ?? {};
   const action = info.action_url;
+  const needed = credits(details.estimated_credits);
+  const balance = credits(details.account_balance_credits);
+  const zone = text(details.reset_timezone);
   switch (category) {
-    case 'account_balance_insufficient': {
-      const balance = credits(details.account_balance_credits);
-      const needed = credits(details.estimated_credits);
-      const figures = [balance && `Balance: ${balance}.`, needed && `This request needs about ${needed}.`].filter(Boolean).join(' ');
-      return `${figures ? `${figures} ` : ''}Ask the user to top up at ${action ?? TOP_UP_URL}, then retry.`;
+    case 'account_balance_insufficient':
+      return sentences(
+        balance && `Balance: ${balance}.`,
+        needed && `This request needs about ${needed}.`,
+        `Ask the user to top up at ${action ?? TOP_UP_URL}, then retry.`,
+      );
+    case 'mcp_limit_reached':
+      return sentences(
+        limitFigures(details, 'EvoLink MCP limit'),
+        needed && `This request needs about ${needed}.`,
+        balance && `Account balance: ${balance} (not the problem).`,
+        `Ask the user to raise or remove the EvoLink MCP limit at ${action ?? MCP_CONSOLE_URL}; it is shared by every assistant connected to their EvoLink account.`,
+        'Do not retry until they have changed it.',
+      );
+    case 'mcp_daily_limit_reached': {
+      const used = credits(details.daily_used_credits);
+      const limit = credits(details.daily_limit_credits);
+      return sentences(
+        used && limit && `Today's EvoLink MCP spending: ${used} of the ${limit} daily limit.`,
+        `It resets automatically at midnight${zone ? ` (${zone})` : ''}.`,
+        balance && `Account balance: ${balance} (not the problem).`,
+        `To continue today, ask the user to raise the EvoLink MCP daily limit at ${action ?? MCP_CONSOLE_URL}.`,
+      );
     }
-    case 'key_quota_exhausted':
-      return hosted
-        ? `This connection's spending limit is used up. Ask the user to raise or remove it in the EvoLink console (${action ?? API_KEYS_URL}).`
-        : `This API key's total limit is used up. Raise it at ${action ?? API_KEYS_URL} or use another key.`;
-    case 'key_daily_quota_exhausted': {
-      const zone = text(details.reset_timezone);
-      return `The daily limit is used up. It resets automatically at midnight${zone ? ` (${zone})` : ''}; to continue today, raise the daily limit at ${action ?? API_KEYS_URL}.`;
+    case 'mcp_paused':
+      return `Ask the user to resume EvoLink MCP at ${action ?? MCP_CONSOLE_URL}. Do not ask them to reconnect, and do not retry until it is resumed.`;
+    case 'key_quota_exhausted': {
+      const name = text(details.key_name);
+      return sentences(
+        limitFigures(details, name ? `Limit of API key "${name}"` : 'API key limit'),
+        needed && `This request needs about ${needed}.`,
+        balance && `Account balance: ${balance} (not the problem).`,
+        `Raise this API key's limit at ${action ?? API_KEYS_URL}, or use another key.`,
+      );
     }
+    case 'key_daily_quota_exhausted':
+      return `It resets automatically at midnight${zone ? ` (${zone})` : ''}; to continue today, raise this API key's daily limit at ${action ?? API_KEYS_URL}.`;
     case 'key_disabled':
-      return hosted
-        ? 'This EvoLink connection was disabled. Ask the user to reconnect EvoLink in this client.'
-        : `This API key is disabled. Enable it at ${action ?? API_KEYS_URL} or use another key.`;
+      return `This API key is disabled. Enable it at ${action ?? API_KEYS_URL} or use another key.`;
     case 'key_expired':
-      return hosted
+      return mode === 'signed_in'
         ? 'This EvoLink connection has expired. Ask the user to reconnect EvoLink in this client.'
         : `This API key has expired. Extend it at ${action ?? API_KEYS_URL} or use another key.`;
     case 'model_not_allowed': {
@@ -186,8 +270,9 @@ function nextStep(category: ErrorCategory, info: GatewayErrorInfo): string {
       return `This key may not use this model.${allowed ? ` Allowed models: ${allowed}.` : ''} Pick an allowed model, or change the key's model list at ${action ?? API_KEYS_URL}.`;
     }
     case 'unauthorized':
-      return hosted
-        ? 'The EvoLink connection was rejected. Ask the user to reconnect EvoLink in this client.'
+      if (mode === 'signed_in') return 'The EvoLink connection was rejected. Ask the user to reconnect EvoLink in this client.';
+      return mode === 'api_key'
+        ? 'The API key was rejected. Ask the user to check the EvoLink API key configured in this client.'
         : 'The API key was rejected. Check EVOLINK_API_KEY, or run `evolink login` again.';
     case 'forbidden':
       return 'Access to this resource is denied for this account.';
@@ -231,7 +316,9 @@ export function classifyGatewayError(
 ): GatewayErrorInfo {
   const error = envelope(body);
   const code = text(error.code);
-  const category = categorize(status, code ?? '');
+  const mode = currentCredentialMode();
+  const mcpScope = text(error.limit_scope)?.toLowerCase() === 'mcp';
+  const category = categorize(status, code ?? '', mode, mcpScope || mode === 'signed_in');
   const requestId = text(error.request_id) ?? headerRequestId;
   const rawMessage = text(error.message) ?? `HTTP ${status}`;
   const message = rawMessage.replace(/\s*\(request id: [^)]*\)\s*$/i, '').slice(0, 600);
@@ -241,32 +328,43 @@ export function classifyGatewayError(
     if (error[field] !== undefined && error[field] !== null && error[field] !== '') details[field] = error[field];
   }
 
-  const defaultAction = category === 'account_balance_insufficient'
-    ? TOP_UP_URL
-    : ['key_quota_exhausted', 'key_daily_quota_exhausted', 'key_disabled', 'key_expired', 'model_not_allowed'].includes(category)
-      ? API_KEYS_URL
-      : undefined;
+  let actionUrl: string | undefined;
+  if (category === 'account_balance_insufficient') {
+    actionUrl = siteUrl(text(error.action_url), TOP_UP_URL);
+  } else if (MCP_LIMIT_CATEGORIES.has(category)) {
+    // Until the gateway marks the answer as an MCP limit, its link is the API Keys page, where this key is not listed.
+    const gatewayKnows = mcpScope || code?.toLowerCase() === 'mcp_paused';
+    actionUrl = gatewayKnows ? siteUrl(text(error.action_url), MCP_CONSOLE_URL) : MCP_CONSOLE_URL;
+  } else if (KEY_CATEGORIES.has(category)) {
+    actionUrl = siteUrl(text(error.action_url), API_KEYS_URL);
+  }
+  const headline = headlineFor(category);
   const info: GatewayErrorInfo = {
     status,
     category,
+    ...(headline ? { headline } : {}),
     code,
     message,
     next_step: '',
     retryable: RETRYABLE.has(category),
     retry_after_seconds: retryAfterMs !== undefined ? Math.max(1, Math.ceil(retryAfterMs / 1000)) : undefined,
-    action_url: defaultAction ? siteUrl(text(error.action_url), defaultAction) : undefined,
+    action_url: actionUrl,
     request_id: requestId,
     details: Object.keys(details).length > 0 ? details : undefined,
   };
-  info.next_step = nextStep(category, info);
+  info.next_step = nextStep(category, info, mode);
   return info;
 }
 
+/**
+ * With a headline the first line says which limit it is; the gateway's own
+ * sentence is left out because it speaks of "API key …" even for the MCP key.
+ */
 export function formatGatewayError(info: GatewayErrorInfo): string {
-  const lines = [
-    `[${info.status}${info.code ? ` ${info.code}` : ''}] ${info.message}`,
-    `Next step: ${info.next_step}`,
-  ];
+  const status = `${info.status}${info.code ? ` ${info.code}` : ''}`;
+  const lines = info.headline
+    ? [info.headline, `Next step: ${info.next_step}`, `Error: HTTP ${status}`]
+    : [`[${status}] ${info.message}`, `Next step: ${info.next_step}`];
   if (info.request_id) lines.push(`Request ID: ${info.request_id}`);
   return lines.join('\n');
 }

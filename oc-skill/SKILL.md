@@ -211,7 +211,8 @@ Tool errors include a next step (for example a top-up link) and a request ID. Fo
 | Error | What to tell the user |
 |-------|----------------------|
 | 401 Unauthorized | "Your API key isn't working. Check or regenerate it at evolink.ai/dashboard/keys" |
-| 402 Payment Required | "Your account balance is low. Add credits at evolink.ai/dashboard/credits" |
+| 402 Payment Required | Say what the error's first line names. Account balance: "Your EvoLink account balance is too low. Add credits at evolink.ai/dashboard/credits". EvoLink MCP limit or an API key's limit: "The spending limit you set is used up; your balance is fine. Raise it in the EvoLink console". Never call a limit a low balance |
+| 403 EvoLink MCP paused | "EvoLink MCP is paused for your account. Resume it in the EvoLink console; you don't need to reconnect" |
 | 429 Rate Limited | "Too many requests — let's wait 30 seconds and try again" |
 | 503 Service Unavailable | "Evolink servers are temporarily busy. Let's try again in a minute" |
 
