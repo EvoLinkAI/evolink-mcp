@@ -9,7 +9,7 @@
   "homepage": "https://evolink.ai/mcp",
   "repository": {
     "type": "git",
-    "url": "https://github.com/EvoLinkAI/mcp.git"
+    "url": "https://github.com/EvoLinkAI/evolink-mcp.git"
   },
   "license": "MIT",
   "keywords": ["video", "image", "music", "ai", "generation", "sora", "suno", "kling"],

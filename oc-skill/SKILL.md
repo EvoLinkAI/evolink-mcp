@@ -30,7 +30,7 @@ Do NOT list features, show a menu, or describe tools. Just ask one question to m
 
 For the best experience, bridge the Evolink MCP server to unlock all generation tools.
 
-**MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
+**MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/evolink-mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
 
 **1. Get API Key:** Sign up at [evolink.ai](https://evolink.ai/signup?utm_source=github[evolink.ai](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)utm_medium=readme[evolink.ai](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)utm_campaign=evolink-media-mcp) → Dashboard → API Keys
 

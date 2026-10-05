@@ -47,7 +47,7 @@ Keep the greeting concise — just one question to move forward.
 
 Get your API key at [evolink.ai](https://evolink.ai/signup?utm_source=github[evolink.ai](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)utm_medium=readme[evolink.ai](https://evolink.ai/signup?utm_source=github&utm_medium=readme&utm_campaign=evolink-media-mcp)utm_campaign=evolink-media-mcp) → Dashboard → API Keys.
 
-**MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
+**MCP Server:** `@evolinkai/mcp` ([GitHub](https://github.com/EvoLinkAI/evolink-mcp) · [npm](https://www.npmjs.com/package/@evolinkai/mcp))
 
 **mcporter** (recommended): `mcporter call --stdio "npx -y @evolinkai/mcp@latest" search_models`
 

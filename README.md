@@ -132,8 +132,8 @@ Image, video and audio models from Google, OpenAI, ByteDance, Kuaishou, Alibaba,
 ## Development
 
 ```bash
-git clone https://github.com/EvoLinkAI/mcp.git
-cd mcp
+git clone https://github.com/EvoLinkAI/evolink-mcp.git
+cd evolink-mcp
 npm install
 npm run build
 npm test

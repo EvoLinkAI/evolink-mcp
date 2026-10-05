@@ -16,8 +16,9 @@ H2 2026 路线是 trust manifests 与注册表级信任信号，占位越晚门�
    （见发布手册 NPM 章节）。
 2. **域名验证**：`ai.evolink/*` 命名空间归属需验证 `evolink.ai` 域名
    （DNS TXT challenge，登录时按 CLI 提示在 Cloudflare 加记录）。
-3. **仓库改名**：GitHub 仓库需先由 EvoLinkAI 改名为 `EvoLinkAI/mcp`。npm provenance
-   会核对 `package.json` 的 `repository` 与实际构建的仓库一致，不改名发布会失败。
+3. **仓库地址一致**：仓库就是 `EvoLinkAI/evolink-mcp`（2026-10-05 定，不再改名）。npm provenance
+   会核对 `package.json` 的 `repository` 与实际构建的仓库一致；各包的 `repository` 已指向它，
+   以后仓库再改名，这里要一起改，否则发布会失败。
 
 ## 发布步骤
 

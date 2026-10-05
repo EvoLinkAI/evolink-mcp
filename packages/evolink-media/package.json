@@ -35,7 +35,7 @@
   "homepage": "https://evolink.ai/mcp",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/EvoLinkAI/mcp.git"
+    "url": "git+https://github.com/EvoLinkAI/evolink-mcp.git"
   },
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.32.0",
